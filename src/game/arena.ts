@@ -33,7 +33,7 @@ function addBox(
   if (collide) solids.push(boxAt(x, y, z, w, h, d));
 }
 
-export function buildArena(scene: THREE.Scene): ArenaData {
+export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): ArenaData {
   const group = new THREE.Group();
   const solids: AABB[] = [];
   const mats: THREE.Material[] = [];
@@ -66,34 +66,24 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     emissiveMap: maps.floor,
     emissiveIntensity: 0.22,
   });
-  const plateMat = new THREE.MeshStandardMaterial({
+  const plateMat = new THREE.MeshLambertMaterial({
     map: maps.plate,
-    roughness: 0.58,
-    metalness: 0.48,
     color: 0xffffff,
   });
-  const beamMat = new THREE.MeshStandardMaterial({
+  const beamMat = new THREE.MeshLambertMaterial({
     map: maps.beam,
-    roughness: 0.7,
-    metalness: 0.32,
     color: 0xffffff,
   });
-  const pipeMat = new THREE.MeshStandardMaterial({
+  const pipeMat = new THREE.MeshLambertMaterial({
     map: maps.pipes,
-    roughness: 0.55,
-    metalness: 0.5,
     color: 0xffffff,
   });
-  const hazardMat = new THREE.MeshStandardMaterial({
+  const hazardMat = new THREE.MeshLambertMaterial({
     map: maps.hazard,
-    roughness: 0.55,
-    metalness: 0.28,
     color: 0xffffff,
   });
-  const consoleMat = new THREE.MeshStandardMaterial({
+  const consoleMat = new THREE.MeshLambertMaterial({
     map: maps.console,
-    roughness: 0.48,
-    metalness: 0.42,
     color: 0xffffff,
     emissive: 0x2ee0c8,
     emissiveMap: maps.console,
@@ -112,6 +102,11 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     emissiveIntensity: 1.35,
     roughness: 0.3,
   });
+  const voxelMat = new THREE.MeshLambertMaterial({
+    color: 0x6f6257,
+    emissive: 0x261c19,
+    emissiveIntensity: 0.22,
+  });
   const padMat = new THREE.MeshStandardMaterial({
     map: padTex,
     emissive: 0x7ff5e4,
@@ -119,37 +114,29 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     roughness: 0.32,
     metalness: 0.5,
   });
-  const runeMat = new THREE.MeshStandardMaterial({
+  const runeMat = new THREE.MeshLambertMaterial({
     map: maps.rune,
-    roughness: 0.45,
-    metalness: 0.35,
     color: 0xffffff,
     emissive: 0x2ee0c8,
     emissiveMap: maps.rune,
     emissiveIntensity: 0.85,
   });
-  const skullMat = new THREE.MeshStandardMaterial({
+  const skullMat = new THREE.MeshLambertMaterial({
     map: maps.skull,
-    roughness: 0.42,
-    metalness: 0.55,
     color: 0xffffff,
     emissive: 0xff5a28,
     emissiveMap: maps.skull,
     emissiveIntensity: 0.28,
   });
-  const ruinMat = new THREE.MeshStandardMaterial({
+  const ruinMat = new THREE.MeshLambertMaterial({
     map: maps.ruin,
-    roughness: 0.72,
-    metalness: 0.28,
     color: 0xffffff,
     emissive: 0xff4a22,
     emissiveMap: maps.ruin,
     emissiveIntensity: 0.12,
   });
-  const armorMat = new THREE.MeshStandardMaterial({
+  const armorMat = new THREE.MeshLambertMaterial({
     map: maps.armor,
-    roughness: 0.5,
-    metalness: 0.58,
     color: 0xffffff,
   });
   mats.push(
@@ -161,6 +148,7 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     consoleMat,
     ionMat,
     emberMat,
+    voxelMat,
     padMat,
     runeMat,
     skullMat,
@@ -168,45 +156,60 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     armorMat,
   );
 
-  const lights = createArenaLights(scene, {
-    floor: floorMat,
-    rune: runeMat,
-    console: consoleMat,
-    ruin: ruinMat,
-    skull: skullMat,
-    pad: padMat,
-    ion: ionMat,
-    ember: emberMat,
-  });
+  const lights = createArenaLights(
+    scene,
+    {
+      floor: floorMat,
+      rune: runeMat,
+      console: consoleMat,
+      ruin: ruinMat,
+      skull: skullMat,
+      pad: padMat,
+      ion: ionMat,
+      ember: emberMat,
+    },
+    renderer,
+  );
 
   const WALL_H = 11;
-  addBox(batch, solids, floorMat, 0, -1, 0, 90, 1, 90);
-  addBox(batch, solids, ruinMat, 0, 0, -44.7, 92, WALL_H, 1.4);
-  addBox(batch, solids, ruinMat, 0, 0, 44.7, 92, WALL_H, 1.4);
-  addBox(batch, solids, ruinMat, -44.7, 0, 0, 1.4, WALL_H, 92);
-  addBox(batch, solids, ruinMat, 44.7, 0, 0, 1.4, WALL_H, 92);
+  const ARENA_HALF = 55;
+  const ARENA_SIZE = ARENA_HALF * 2 + 2;
+  addBox(batch, solids, floorMat, 0, -1, 0, ARENA_SIZE, 1, ARENA_SIZE);
+  addBox(batch, solids, ruinMat, 0, 0, -ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
+  addBox(batch, solids, ruinMat, 0, 0, ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
+  addBox(batch, solids, ruinMat, -ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
+  addBox(batch, solids, ruinMat, ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
 
   const runeDecals = [
-    { x: 0, y: 5.2, z: -43.96, ry: 0, s: 3.2 },
-    { x: 0, y: 5.2, z: 43.96, ry: Math.PI, s: 3.2 },
-    { x: -43.96, y: 5.2, z: 0, ry: Math.PI / 2, s: 3.2 },
-    { x: 43.96, y: 5.2, z: 0, ry: -Math.PI / 2, s: 3.2 },
+    { x: 0, y: 5.2, z: -54.26, ry: 0, s: 3.2 },
+    { x: 0, y: 5.2, z: 54.26, ry: Math.PI, s: 3.2 },
+    { x: -54.26, y: 5.2, z: 0, ry: Math.PI / 2, s: 3.2 },
+    { x: 54.26, y: 5.2, z: 0, ry: -Math.PI / 2, s: 3.2 },
   ];
   const skullDecals = [
-    { x: -16, y: 4.2, z: -43.96, ry: 0, s: 3.6 },
-    { x: 16, y: 4.2, z: 43.96, ry: Math.PI, s: 3.6 },
-    { x: -43.96, y: 4.2, z: 16, ry: Math.PI / 2, s: 3.6 },
-    { x: 43.96, y: 4.2, z: -16, ry: -Math.PI / 2, s: 3.6 },
+    { x: -16, y: 4.2, z: -54.26, ry: 0, s: 3.6 },
+    { x: 16, y: 4.2, z: 54.26, ry: Math.PI, s: 3.6 },
+    { x: -54.26, y: 4.2, z: 16, ry: Math.PI / 2, s: 3.6 },
+    { x: 54.26, y: 4.2, z: -16, ry: -Math.PI / 2, s: 3.6 },
   ];
   geos.push(instancePlanes(group, runeMat, runeDecals).geo);
   geos.push(instancePlanes(group, skullMat, skullDecals).geo);
 
-  addBox(batch, solids, hazardMat, 0, 3.2, -44.05, 88, 0.12, 0.2, false);
-  addBox(batch, solids, hazardMat, 0, 3.2, 44.05, 88, 0.12, 0.2, false);
-  addBox(batch, solids, ionMat, -44.05, 6.2, 0, 0.18, 0.1, 88, false);
-  addBox(batch, solids, ionMat, 44.05, 6.2, 0, 0.18, 0.1, 88, false);
+  addBox(batch, solids, hazardMat, 0, 3.2, -54.05, 108, 0.12, 0.2, false);
+  addBox(batch, solids, hazardMat, 0, 3.2, 54.05, 108, 0.12, 0.2, false);
+  addBox(batch, solids, ionMat, -54.05, 6.2, 0, 0.18, 0.1, 108, false);
+  addBox(batch, solids, ionMat, 54.05, 6.2, 0, 0.18, 0.1, 108, false);
   addBox(batch, solids, consoleMat, 0, 0, 0, 7.2, 1.35, 7.2);
   addBox(batch, solids, emberMat, 0, 1.35, 0, 7.2, 0.08, 7.2, false);
+
+  // Voxel ruins: stepped blocks give the arena a readable Minecraft-like silhouette
+  // without replacing the existing industrial collision layout.
+  for (const [x, z, h] of [[-34, -20, 4], [34, -20, 3], [-34, 20, 3], [34, 20, 4], [-20, -34, 3], [20, 34, 4]] as const) {
+    for (let level = 0; level < h; level++) {
+      const inset = level * 0.18;
+      addBox(batch, solids, voxelMat, x, level * 1.05, z, 3.2 - inset, 1.02, 3.2 - inset);
+    }
+  }
 
   for (const [px, pz, ph] of [
     [-8, -8, 4.4],
@@ -270,6 +273,12 @@ export function buildArena(scene: THREE.Scene): ArenaData {
   addBox(batch, solids, beamMat, 0, 8.2, 0, 72, 0.4, 0.55, false);
   addBox(batch, solids, beamMat, 0, 8.2, 0, 0.55, 0.4, 72, false);
 
+  // Perimeter cover expands the combat space with a small, batched geometry cost.
+  for (const [x, z] of [[-49, -42], [49, -42], [-49, 42], [49, 42]] as const) {
+    addBox(batch, solids, ruinMat, x, 0, z, 4.8, 4.8, 4.8);
+    addBox(batch, solids, ionMat, x, 4.85, z, 5, 0.12, 5, false);
+  }
+
   const pads: JumpPad[] = [];
   const padSpecs: Array<{ x: number; z: number; vx: number; vy: number; vz: number; lit?: boolean }> = [
     { x: -17, z: -17, vx: 8, vy: 13.5, vz: 8, lit: true },
@@ -282,6 +291,10 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     { x: 38, z: -38, vx: -11, vy: 14.5, vz: 11 },
     { x: 38, z: 38, vx: -11, vy: 14.5, vz: -11 },
     { x: -38, z: 38, vx: 11, vy: 14.5, vz: -11 },
+    { x: -47, z: -43, vx: 12, vy: 15.5, vz: 10 },
+    { x: 47, z: -43, vx: -12, vy: 15.5, vz: 10 },
+    { x: 47, z: 43, vx: -12, vy: 15.5, vz: -10 },
+    { x: -47, z: 43, vx: 12, vy: 15.5, vz: -10 },
   ];
   for (const p of padSpecs) {
     if (p.lit) lights.addPad(group, p.x, p.z);
@@ -320,6 +333,9 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     { id: "p7", kind: "rush", x: -36, y: 3.55, z: 8, respawn: 24 },
     { id: "p8", kind: "blink", x: 36, y: 3.55, z: -8, respawn: 26 },
     { id: "p9", kind: "volt", x: 0, y: 3.55, z: 32, respawn: 28 },
+    { id: "h7", kind: "health", x: -47, y: 5.35, z: -42, respawn: 16 },
+    { id: "h8", kind: "health", x: 47, y: 5.35, z: 42, respawn: 16 },
+    { id: "am4", kind: "ammo", x: 47, y: 5.35, z: -42, respawn: 16 },
   ];
 
   const spawns: Spawn[] = [
@@ -361,6 +377,10 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     { x: 24, y: 0, z: 24 },
     { x: -38, y: 0, z: -38 },
     { x: 38, y: 0, z: 38 },
+    { x: -48, y: 0, z: -42 },
+    { x: 48, y: 0, z: -42 },
+    { x: 48, y: 0, z: 42 },
+    { x: -48, y: 0, z: 42 },
   ];
 
   const skyDome = loadSkyTex("/textures/sky-dome.jpg");
@@ -382,9 +402,11 @@ export function buildArena(scene: THREE.Scene): ArenaData {
   sky.position.y = 12;
   sky.frustumCulled = false;
   sky.renderOrder = -20;
+  sky.castShadow = false;
+  sky.receiveShadow = false;
   scene.add(sky);
 
-  const cityGeo = new THREE.CylinderGeometry(92, 92, 40, 20, 1, true);
+  const cityGeo = new THREE.CylinderGeometry(116, 116, 40, 20, 1, true);
   const cityMat = new THREE.MeshBasicMaterial({
     map: horizon,
     side: THREE.BackSide,
@@ -397,6 +419,8 @@ export function buildArena(scene: THREE.Scene): ArenaData {
   city.position.y = 18;
   city.frustumCulled = false;
   city.renderOrder = -18;
+  city.castShadow = false;
+  city.receiveShadow = false;
   scene.add(city);
 
   batch.build(group);

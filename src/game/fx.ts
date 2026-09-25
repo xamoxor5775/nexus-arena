@@ -13,6 +13,7 @@ type Particle = {
   grow: number;
   drag: number;
   grav: number;
+  bounce: number;
   r: number;
   g: number;
   b: number;
@@ -22,7 +23,7 @@ const lo =
   typeof window !== "undefined" &&
   (window.innerWidth < 720 || (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false));
 
-const MAX = lo ? 96 : 180;
+const MAX = lo ? 120 : 240;
 
 function glowMap(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -74,6 +75,7 @@ export class ParticleField {
         grow: 0,
         drag: 0.4,
         grav: 10,
+        bounce: 0,
         r: 1,
         g: 1,
         b: 1,
@@ -150,6 +152,7 @@ export class ParticleField {
       grow?: number;
       drag?: number;
       grav?: number;
+      bounce?: number;
       up?: number;
     } = {},
   ) {
@@ -178,6 +181,7 @@ export class ParticleField {
     p.grow = opts.grow ?? 0;
     p.drag = opts.drag ?? 0.6;
     p.grav = opts.grav ?? 11;
+    p.bounce = opts.bounce ?? 0;
     this.hex.setHex(color);
     p.r = this.hex.r;
     p.g = this.hex.g;
@@ -212,12 +216,68 @@ export class ParticleField {
   }
 
   explode(x: number, y: number, z: number, color: number) {
-    this.emit(x, y, z, 0xfff2c8, { speed: 0.04, life: 0.14, size: 1.2, grow: -4, grav: 0, up: 0 });
-    this.emit(x, y, z, color, { speed: 0.06, life: 0.24, size: 0.8, grow: -1.5, grav: 0, up: 0.15 });
-    const n = this.n(14);
-    for (let i = 0; i < n; i++) this.emit(x, y, z, color, { speed: 8, life: 0.38, size: 0.2, up: 2, grav: 14 });
-    for (let i = 0; i < this.n(6); i++) {
-      this.emit(x, y + 0.1, z, 0xff6a32, { speed: 1, life: 0.55, size: 0.3, grow: 0.9, up: 1.6, grav: -1, drag: 2 });
+    this.emit(x, y, z, 0xfff6de, { speed: 0.02, life: 0.1, size: 1.7, grow: -5.5, grav: 0, up: 0 });
+    this.emit(x, y, z, 0xffe08a, { speed: 0.04, life: 0.16, size: 1.15, grow: -3.2, grav: 0, up: 0 });
+    this.emit(x, y, z, color, { speed: 0.05, life: 0.26, size: 0.86, grow: -1.2, grav: 0, up: 0.12 });
+    const sparks = this.n(16);
+    for (let i = 0; i < sparks; i++) {
+      this.emit(x, y, z, i % 2 ? 0xfff1b0 : color, {
+        speed: 9 + Math.random() * 5,
+        life: 0.28 + Math.random() * 0.22,
+        size: 0.12 + Math.random() * 0.08,
+        up: 1.6,
+        grav: 16,
+        drag: 0.7,
+        bounce: 0.28,
+      });
+    }
+    for (let i = 0; i < this.n(7); i++) {
+      this.emit(x, y + 0.05, z, 0x5a3a28, {
+        speed: 4.2,
+        life: 0.7,
+        size: 0.1,
+        up: 1.1,
+        grav: 22,
+        drag: 0.9,
+        bounce: 0.42,
+      });
+    }
+    for (let i = 0; i < this.n(8); i++) {
+      this.emit(x, y + 0.08, z, 0xff6a28, {
+        speed: 1.4,
+        life: 0.62,
+        size: 0.28,
+        grow: 1.1,
+        up: 2.1,
+        grav: -1.4,
+        drag: 2.4,
+        cone: 0.9,
+      });
+    }
+    for (let i = 0; i < this.n(7); i++) {
+      this.emit(x, y + 0.16, z, 0x4a3228, {
+        speed: 0.7,
+        life: 0.95,
+        size: 0.34,
+        grow: 2.4,
+        up: 1.3,
+        grav: -0.45,
+        drag: 2.8,
+        cone: 0.7,
+      });
+    }
+    const ring = this.n(10);
+    for (let i = 0; i < ring; i++) {
+      const a = (i / ring) * Math.PI * 2;
+      this.emit(x, y + 0.04, z, 0xffc48a, {
+        vx: Math.cos(a) * 8.5,
+        vy: 0.35,
+        vz: Math.sin(a) * 8.5,
+        life: 0.2,
+        size: 0.2,
+        grav: 3,
+        drag: 1.6,
+      });
     }
   }
 
@@ -288,6 +348,30 @@ export class ParticleField {
     this.emit(x, y, z, color, { speed: 0.3, life: 0.12, size: 0.14, grow: 0.3, grav: 0, up: 0, drag: 2 });
   }
 
+  pixelTrail(x: number, y: number, z: number) {
+    if (this.alive.length > MAX * 0.7) return;
+    this.emit(x, y, z, 0x7af0ff, { speed: 0.2, life: 0.18, size: 0.1, grow: 0.2, grav: 0, up: 0, drag: 2 });
+    this.emit(x, y, z, 0xfff2c8, { speed: 0.1, life: 0.1, size: 0.06, grav: 0, up: 0 });
+  }
+
+  pixelExplode(x: number, y: number, z: number) {
+    this.emit(x, y, z, 0xffffff, { speed: 0.04, life: 0.16, size: 1.5, grow: -4.5, grav: 0, up: 0 });
+    const colors = [0x7af0ff, 0x2ee0c8, 0xffd166, 0xe24a2b];
+    for (let i = 0; i < this.n(42); i++) {
+      this.emit(x, y, z, colors[i % colors.length]!, {
+        speed: 9 + Math.random() * 6,
+        life: 0.45 + Math.random() * 0.22,
+        size: 0.1 + Math.random() * 0.08,
+        up: 2.5,
+        grav: 16,
+        drag: 0.8,
+      });
+    }
+    for (let i = 0; i < this.n(12); i++) {
+      this.emit(x, y + 0.1, z, 0x7af0ff, { speed: 2.2, life: 0.75, size: 0.16, grow: 0.35, up: 0.4, grav: 1, drag: 1.8 });
+    }
+  }
+
   rush(x: number, y: number, z: number, color: number) {
     if (this.busy()) return;
     this.emit(x, y, z, color, { speed: 1.4, life: 0.14, size: 0.16, up: 0.04, grav: 0, drag: 1.8, cone: 0.55 });
@@ -352,6 +436,12 @@ export class ParticleField {
       p.x += p.vx * dampDt;
       p.y += p.vy * dampDt;
       p.z += p.vz * dampDt;
+      if (p.bounce > 0 && p.y < 0.04) {
+        p.y = 0.04;
+        p.vy = Math.abs(p.vy) * p.bounce;
+        p.vx *= 0.72;
+        p.vz *= 0.72;
+      }
       const t = p.life / p.max;
       const fade = t * t;
       const o = w * 3;

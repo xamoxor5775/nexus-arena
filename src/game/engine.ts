@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { ArenaAudio } from "./audio";
 import { buildArena, makeItemMesh, type ArenaData } from "./arena";
-import { blockedAt, bodyBox, depenetrate, moveBody, overlaps, rayAABB, raycastWorld } from "./collision";
 import {
   AIR_ACCEL,
   AIR_WISH_CAP,
@@ -10,6 +9,7 @@ import {
   BOT_COLOR_CSS,
   BOT_NAMES,
   COYOTE,
+  CREDITS_KEY,
   CROUCH_EYE,
   CROUCH_H,
   EYE,
@@ -19,14 +19,15 @@ import {
   GROUND_SNAP,
   JUMP_BUF,
   JUMP_VEL,
-  MAX_ACCUM,
   MAX_AIR,
   MAX_GROUND,
   PLAYER_H,
   PLAYER_HW,
   POWER_META,
+  ROUND_SECONDS,
+  SHOP_META,
+  STARTING_GRENADES,
   SPRINT,
-  STEP,
   STEP_HEIGHT,
   STOP_SPEED,
   WEAPON_META,
@@ -37,8 +38,14 @@ import { animateFighter, makeBotMesh, resetFighterMesh } from "./fighterMesh";
 import { ParticleField, TraumaShake } from "./fx";
 import { BeamBatch, InstancePool } from "./instancing";
 import { GameInput } from "./input";
-import type { AABB, ControlsProbe, HudSnapshot, KillFeedItem, PowerId, Screen, Settings, WeaponId } from "./types";
-import { buildViewmodel, restPose } from "./viewmodel";
+import { FrameLoop } from "./loop";
+import { localSnapshot, RemoteSync, type RemoteSnapshot } from "./network";
+import { accelerateWish, blockedAt, bodyBox, depenetrate, moveBody, overlaps, rayAABB, raycastWorld } from "./physics";
+import { createArenaRenderer, type ArenaRenderer } from "./renderer";
+import type { ControlsProbe, HudSnapshot, KillFeedItem, PowerId, Screen, Settings, ShopItemId, WeaponId } from "./types";
+import { adsPose, restPose } from "./viewmodel";
+
+export type { RemoteSnapshot } from "./network";
 
 const _look = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
@@ -46,12 +53,12 @@ const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _dir = new THREE.Vector3();
-const _accDir = new THREE.Vector3();
 
 type Fighter = {
   id: string;
   name: string;
   isPlayer: boolean;
+  isRemote: boolean;
   color: number;
   colorCss: string;
   pos: THREE.Vector3;
@@ -90,6 +97,7 @@ type Fighter = {
   powers: Record<PowerId, number>;
   blinkCharges: number;
   airJumps: number;
+  grenades: number;
 };
 
 type Proj = {
@@ -104,6 +112,7 @@ type Proj = {
   radius: number;
   slot: number;
   pool: "rocket" | "ion";
+  pixel: boolean;
 };
 
 type WorldItem = {
@@ -129,11 +138,9 @@ export class NexusArena {
   settings: Settings;
   private canvas: HTMLCanvasElement;
   private hooks: EngineHooks;
-  private renderer: THREE.WebGLRenderer;
-  private scene = new THREE.Scene();
-  private gunScene = new THREE.Scene();
-  private camera: THREE.PerspectiveCamera;
-  private gunCam: THREE.PerspectiveCamera;
+  private view: ArenaRenderer;
+  private loop = new FrameLoop();
+  private net = new RemoteSync();
   private audio = new ArenaAudio();
   private arena!: ArenaData;
   private fx = new ParticleField();
@@ -143,13 +150,9 @@ export class NexusArena {
   private projectiles: Proj[] = [];
   private beamBatch = new BeamBatch(24);
   private items: WorldItem[] = [];
-  private guns = new Map<WeaponId, THREE.Group>();
-  private gunRoot = new THREE.Group();
   private recoil = 0;
   private bob = 0;
   private eyeY = EYE;
-  private acc = 0;
-  private last = 0;
   private running = false;
   private disposed = false;
   private screen: Screen = "menu";
@@ -165,8 +168,15 @@ export class NexusArena {
   private killFeed: KillFeedItem[] = [];
   private feedSeq = 0;
   private winner: string | null = null;
+  private roundSeconds = 0;
+  private credits = 35;
+  private score = 0;
   private hudClock = 0;
   private muzzle = 0;
+  private adsT = 0;
+  private streak = 0;
+  private streakUntil = 0;
+  private firstBlood = true;
   private reducedMotion = false;
   private landDip = 0;
   private swayX = 0;
@@ -190,50 +200,11 @@ export class NexusArena {
     this.settings = { ...settings };
     this.hooks = hooks;
     this.reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-
-    this.renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      powerPreference: "high-performance",
-      alpha: false,
-    });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-    this.renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.32;
-    this.renderer.autoClear = false;
-
-    this.camera = new THREE.PerspectiveCamera(settings.fov, 1, 0.05, 420);
-    this.gunCam = new THREE.PerspectiveCamera(42, 1, 0.04, 8);
-    this.gunCam.layers.set(1);
-
-    this.arena = buildArena(this.scene);
-    this.scene.add(this.fx.mesh);
-    this.scene.add(this.rockets.mesh, this.ions.mesh);
-    this.scene.add(this.beamBatch.mesh);
-
-    for (const id of WEAPON_ORDER) {
-      const g = buildViewmodel(id);
-      g.visible = false;
-      this.guns.set(id, g);
-      this.gunRoot.add(g);
-    }
-    this.gunScene.add(this.gunRoot);
-    this.gunRoot.scale.setScalar(1.36);
-    this.gunScene.add(new THREE.HemisphereLight(0xfff6ee, 0x1a1612, 0.55));
-    const gl = new THREE.DirectionalLight(0xfff4e4, 2.85);
-    gl.position.set(0.7, 1.25, 0.85);
-    this.gunScene.add(gl);
-    const grim = new THREE.DirectionalLight(0x7af0e0, 0.62);
-    grim.position.set(-1.1, 0.25, -0.55);
-    this.gunScene.add(grim);
-    const gfill = new THREE.DirectionalLight(0xffc09a, 0.48);
-    gfill.position.set(0.15, -0.7, 0.55);
-    this.gunScene.add(gfill);
-    const gtop = new THREE.DirectionalLight(0xf2f6ff, 0.5);
-    gtop.position.set(0, 1.6, 0.2);
-    this.gunScene.add(gtop);
+    this.view = createArenaRenderer(canvas, settings.fov);
+    this.arena = buildArena(this.view.scene, this.view.renderer);
+    this.view.scene.add(this.fx.mesh);
+    this.view.scene.add(this.rockets.mesh, this.ions.mesh);
+    this.view.scene.add(this.beamBatch.mesh);
 
     this.player = this.makeFighter("you", settings.name, 0xece8de, "#ece8de", true);
     this.fighters.push(this.player);
@@ -249,7 +220,7 @@ export class NexusArena {
       );
       bot.skill = 0.45 + i * 0.12;
       bot.mesh = makeBotMesh(bot.color, i);
-      this.scene.add(bot.mesh);
+      this.view.scene.add(bot.mesh);
       this.fighters.push(bot);
       this.spawn(bot, true);
     }
@@ -257,7 +228,7 @@ export class NexusArena {
     for (const pad of this.arena.items) {
       const mesh = makeItemMesh(pad.kind);
       mesh.position.set(pad.x, pad.y + 0.35, pad.z);
-      this.scene.add(mesh);
+      this.view.scene.add(mesh);
       this.items.push({
         id: pad.id,
         kind: pad.kind,
@@ -272,27 +243,28 @@ export class NexusArena {
     }
 
     this.input.attach(canvas);
-    this.resize();
+    this.view.resize();
     window.addEventListener("resize", this.resize);
 
     document.addEventListener("pointerlockchange", this.onLock);
     this.bindControlsTest();
     this.audio.startDrone();
     this.setBotsVisible(this.settings.bots);
+    this.credits = this.loadCredits();
     this.emitHud();
   }
 
   start() {
     if (this.running) return;
     this.running = true;
-    this.last = performance.now();
-    this.renderer.setAnimationLoop(this.frame);
+    this.loop.start();
+    this.view.renderer.setAnimationLoop(this.frame);
   }
 
   dispose() {
     this.disposed = true;
     this.running = false;
-    this.renderer.setAnimationLoop(null);
+    this.view.renderer.setAnimationLoop(null);
     this.unlock();
     this.input.detach();
     window.removeEventListener("resize", this.resize);
@@ -305,14 +277,13 @@ export class NexusArena {
     this.beamBatch.dispose();
     this.rocketGeo.dispose();
     this.ionGeo.dispose();
-    this.renderer.dispose();
+    this.view.dispose();
     if (window.__controlsTest) delete window.__controlsTest;
   }
 
   setSettings(s: Settings) {
     this.settings = { ...s };
-    this.camera.fov = s.fov;
-    this.camera.updateProjectionMatrix();
+    this.view.setWorldFov(s.fov);
     this.audio.setVolume(s.volume);
     this.player.name = s.name || "Raven";
     this.setBotsVisible(s.bots);
@@ -323,6 +294,11 @@ export class NexusArena {
     this.winner = null;
     this.matchOn = true;
     this.killFeed = [];
+    this.roundSeconds = ROUND_SECONDS;
+    this.score = 0;
+    this.streak = 0;
+    this.streakUntil = 0;
+    this.firstBlood = true;
     this.countdown = 3;
     for (const f of this.fighters) {
       f.frags = 0;
@@ -381,6 +357,15 @@ export class NexusArena {
     this.input.fireHeld = v;
     if (v) this.input.fireClicked = true;
   }
+  setTouchAim(v: boolean) {
+    this.input.aimHeld = v;
+  }
+  setTouchReload() {
+    this.input.reloadClicked = true;
+  }
+  setTouchGrenade() {
+    this.input.grenadeClicked = true;
+  }
   setTouchJump() {
     this.input.jumpClicked = true;
   }
@@ -392,6 +377,91 @@ export class NexusArena {
   }
   cycleWeapon(dir: 1 | -1) {
     this.cycle(this.player, dir);
+  }
+
+  localNetworkSnapshot(): RemoteSnapshot {
+    return localSnapshot(this.player);
+  }
+
+  addRemotePlayer(id: string, name: string) {
+    const fighterId = `remote:${id}`;
+    if (this.fighters.some((fighter) => fighter.id === fighterId)) return;
+    const color = 0x7af0e0;
+    const remote = this.makeFighter(fighterId, name || "Player", color, "#7af0e0", false, true);
+    remote.mesh = makeBotMesh(color, this.fighters.length);
+    this.view.scene.add(remote.mesh);
+    this.fighters.push(remote);
+    this.spawn(remote, true);
+    remote.mesh.visible = true;
+  }
+
+  removeRemotePlayer(id: string) {
+    const fighterId = `remote:${id}`;
+    this.net.remove(id);
+    const index = this.fighters.findIndex((fighter) => fighter.id === fighterId);
+    if (index < 0) return;
+    const fighter = this.fighters[index]!;
+    if (fighter.mesh) this.view.scene.remove(fighter.mesh);
+    this.fighters.splice(index, 1);
+  }
+
+  applyRemoteSnapshot(id: string, snapshot: RemoteSnapshot) {
+    this.net.ingest(id, snapshot);
+  }
+
+  buyShopItem(id: ShopItemId): boolean {
+    if (this.screen !== "playing" || !this.matchOn) return false;
+    const item = SHOP_META[id];
+    if (!item || this.credits < item.cost) return false;
+    const now = performance.now() / 1000;
+    if (item.kind === "weapon") {
+      const weapon = id as WeaponId;
+      if (this.player.owned.has(weapon)) return false;
+      this.player.owned.add(weapon);
+      this.player.mag[weapon] = WEAPON_META[weapon].mag;
+      this.player.reserve[weapon] = WEAPON_META[weapon].reserve;
+      this.player.weapon = weapon;
+    } else {
+      const power = id as PowerId;
+      if (now < this.player.powers[power]) return false;
+      this.player.powers[power] = now + POWER_META[power].duration;
+      if (power === "blink") this.player.blinkCharges = 3;
+      if (power === "rush") this.player.airJumps = 1;
+      this.audio.power();
+    }
+    this.credits -= item.cost;
+    this.saveCredits();
+    this.pickupMsg = `${item.label} · -${item.cost} CR`;
+    this.pickupT = 1.4;
+    return true;
+  }
+
+  private loadCredits() {
+    try {
+      const n = Number(localStorage.getItem(CREDITS_KEY) || "35");
+      if (Number.isFinite(n)) return Math.max(0, Math.min(9999, Math.round(n)));
+    } catch {
+      /* ignore */
+    }
+    return 35;
+  }
+
+  private saveCredits() {
+    try {
+      localStorage.setItem(CREDITS_KEY, String(this.credits));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private grant(credits: number, score: number, medal?: string) {
+    this.credits += credits;
+    this.score += score;
+    this.saveCredits();
+    if (medal) {
+      this.pickupMsg = medal;
+      this.pickupT = 1.8;
+    }
   }
 
   private setScreen(s: Screen) {
@@ -409,13 +479,7 @@ export class NexusArena {
   };
 
   private resize = () => {
-    const w = this.canvas.clientWidth || window.innerWidth;
-    const h = this.canvas.clientHeight || window.innerHeight;
-    this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / Math.max(1, h);
-    this.camera.updateProjectionMatrix();
-    this.gunCam.aspect = w / Math.max(1, h);
-    this.gunCam.updateProjectionMatrix();
+    this.view.resize();
   };
 
   private makeFighter(
@@ -424,6 +488,7 @@ export class NexusArena {
     color: number,
     colorCss: string,
     isPlayer: boolean,
+    isRemote = false,
   ): Fighter {
     const mag = { pulse: 40, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
     const reserve = { pulse: 80, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
@@ -431,6 +496,7 @@ export class NexusArena {
       id,
       name,
       isPlayer,
+      isRemote,
       color,
       colorCss,
       pos: new THREE.Vector3(),
@@ -469,6 +535,7 @@ export class NexusArena {
       powers: { rush: 0, blink: 0, volt: 0 },
       blinkCharges: 0,
       airJumps: 0,
+      grenades: STARTING_GRENADES,
     };
   }
 
@@ -482,12 +549,13 @@ export class NexusArena {
     f.powers = { rush: 0, blink: 0, volt: 0 };
     f.blinkCharges = 0;
     f.airJumps = 0;
+    f.grenades = STARTING_GRENADES;
   }
 
   private setBotsVisible(n: number) {
     let i = 0;
     for (const f of this.fighters) {
-      if (f.isPlayer) continue;
+      if (f.isPlayer || f.isRemote) continue;
       const on = i < n;
       i++;
       if (!on && f.alive) {
@@ -539,19 +607,11 @@ export class NexusArena {
   private frame = (nowMs: number) => {
     if (this.disposed) return;
     const now = nowMs / 1000;
-    let dt = (nowMs - this.last) / 1000;
-    this.last = nowMs;
-    dt = Math.min(dt, 0.1);
-    this.acc += dt;
-    if (this.acc > MAX_ACCUM) this.acc = MAX_ACCUM;
+    const dt = this.loop.begin(nowMs);
     this.input.pollGamepad();
-
-    while (this.acc >= STEP) {
-      this.fixed(STEP, now);
-      this.acc -= STEP;
-    }
+    this.loop.consumeFixed((step) => this.fixed(step, now));
     this.visuals(dt, now);
-    this.render();
+    this.view.render(this.screen === "playing" && this.player.alive);
     this.hudClock += dt;
     if (this.hudClock > 0.05) {
       this.hudClock = 0;
@@ -566,6 +626,11 @@ export class NexusArena {
       if (this.countdown <= 0) this.countdown = null;
     }
 
+    if (this.screen === "playing" && this.countdown === null && this.matchOn) {
+      this.roundSeconds = Math.max(0, this.roundSeconds - dt);
+      if (this.roundSeconds <= 0) this.finishRound();
+    }
+
     if (this.screen === "playing" && this.countdown === null) {
       this.readPlayerInput(dt);
     } else if (this.screen !== "playing") {
@@ -576,9 +641,9 @@ export class NexusArena {
     }
 
     for (const f of this.fighters) {
-      if (!f.isPlayer) this.thinkBot(f, now, dt);
+      if (!f.isPlayer && !f.isRemote) this.thinkBot(f, now, dt);
       if (!f.alive) {
-        if (this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f, false);
+        if (!f.isRemote && this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f, false);
         if (f.mesh && f.mesh.visible) {
           f.vel.y -= GRAVITY * dt;
           f.vel.x *= 0.92;
@@ -602,6 +667,25 @@ export class NexusArena {
             land: 0,
             protect: false,
           });
+        }
+        continue;
+      }
+      if (f.isRemote) {
+        const remoteId = f.id.startsWith("remote:") ? f.id.slice("remote:".length) : f.id;
+        const snap = this.net.sample(remoteId, dt);
+        if (snap) {
+          f.pos.set(snap.x, snap.y, snap.z);
+          f.yaw = snap.yaw;
+          f.pitch = snap.pitch;
+          f.health = snap.health;
+          f.weapon = snap.weapon;
+          f.alive = snap.alive;
+        }
+        if (f.mesh) {
+          f.mesh.visible = f.alive;
+          f.mesh.position.copy(f.pos);
+          f.mesh.rotation.set(0, f.yaw, 0);
+          animateFighter(f.mesh, { speed: 0, grounded: true, velY: 0, pitch: f.pitch, dt, firing: false, dead: !f.alive, land: 0, protect: false });
         }
         continue;
       }
@@ -659,6 +743,7 @@ export class NexusArena {
     this.player.wishJump = this.input.jumping();
     this.player.wantsFire = this.input.fireHeld || this.input.fireClicked;
     if (this.input.reloadClicked) this.startReload(this.player, performance.now() / 1000);
+    if (this.input.grenadeClicked) this.throwPixelGrenade(this.player, performance.now() / 1000);
     if (this.input.slot) {
       const id = WEAPON_ORDER[this.input.slot - 1];
       if (id && this.player.owned.has(id)) this.player.weapon = id;
@@ -667,6 +752,32 @@ export class NexusArena {
     if (this.input.prevWeapon) this.cycle(this.player, -1);
     this.player.jumpBuf = this.player.wishJump ? JUMP_BUF : Math.max(0, this.player.jumpBuf - dt);
     void dt;
+  }
+
+  private throwPixelGrenade(f: Fighter, now: number) {
+    if (!f.isPlayer || f.grenades <= 0) return;
+    const slot = this.rockets.spawn(f.pos.x, f.pos.y + this.eyeY, f.pos.z, 0x7af0ff);
+    if (slot === null) return;
+    this.lookVec(f, _look);
+    const origin = new THREE.Vector3(f.pos.x, f.pos.y + this.eyeY, f.pos.z).addScaledVector(_look, 0.45);
+    this.projectiles.push({
+      pos: origin,
+      vel: _look.clone().multiplyScalar(19).add(new THREE.Vector3(0, 6.2, 0)),
+      owner: f.id,
+      weapon: "torpedo",
+      ttl: 1.5,
+      dmg: 78,
+      splash: 5.2,
+      knock: 13,
+      radius: 0.18,
+      slot,
+      pool: "rocket",
+      pixel: true,
+    });
+    f.grenades -= 1;
+    this.pickupMsg = `GRANADA PIXEL · ${f.grenades} RESTANTES`;
+    this.pickupT = 1.1;
+    this.audio.fire("torpedo");
   }
 
   private cycle(f: Fighter, dir: 1 | -1) {
@@ -746,11 +857,11 @@ export class NexusArena {
         f.vel.x = 0;
         f.vel.z = 0;
       }
-      this.accelerate(f, _wish, maxSp, GROUND_ACCEL, dt);
+      this.accelerateWishOn(f, _wish, maxSp, GROUND_ACCEL, dt);
     } else {
       f.vel.y -= GRAVITY * dt;
       const wishSp = Math.min(maxSp, AIR_WISH_CAP * (rush ? 1.55 : 1));
-      this.accelerate(f, _wish, wishSp, AIR_ACCEL, dt);
+      this.accelerateWishOn(f, _wish, wishSp, AIR_ACCEL, dt);
     }
 
     const prevVy = f.vel.y;
@@ -786,16 +897,8 @@ export class NexusArena {
     if (f.pos.y < -8) this.kill(f, null, "world", false);
   }
 
-  private accelerate(f: Fighter, wish: THREE.Vector3, wishSp: number, accel: number, dt: number) {
-    if (wishSp <= 0 || wish.lengthSq() < 0.0001) return;
-    _accDir.copy(wish).normalize();
-    const current = f.vel.x * _accDir.x + f.vel.z * _accDir.z;
-    const add = wishSp - current;
-    if (add <= 0) return;
-    let acc = accel * dt * wishSp;
-    if (acc > add) acc = add;
-    f.vel.x += _accDir.x * acc;
-    f.vel.z += _accDir.z * acc;
+  private accelerateWishOn(f: Fighter, wish: THREE.Vector3, wishSp: number, accel: number, dt: number) {
+    accelerateWish(f.vel, wish, wishSp, accel, dt);
   }
 
   private blinkTo(f: Fighter) {
@@ -948,6 +1051,7 @@ export class NexusArena {
         this.arena.lights.flash(it.x, it.y + 0.4, it.z, col, 9);
         this.fx.pickup(it.x, it.y + 0.4, it.z, col);
         if (f.isPlayer) {
+          this.grant(6, 30);
           if (!isPower(it.kind)) this.audio.pickup();
           this.pickupMsg = msg;
           this.pickupT = 1.4;
@@ -1010,8 +1114,8 @@ export class NexusArena {
         }
         if (hit.fighter) {
           const head = hit.point.y > hit.fighter.pos.y + hit.fighter.height * 0.72;
-          const dmg = meta.damage * dmgMul * (head && w === "lance" ? 1.35 : 1);
-          this.hurtFighter(hit.fighter, dmg, f, w, _dir, meta.knock, head && w === "lance");
+          const dmg = meta.damage * dmgMul * (head ? 1.6 : 1);
+          this.hurtFighter(hit.fighter, dmg, f, w, _dir, meta.knock, head);
           if (volt) this.chainVolt(f, hit.fighter, dmg * 0.4, now);
           if (f.isPlayer) this.hitmarker = 0.12;
         }
@@ -1034,6 +1138,7 @@ export class NexusArena {
         radius: w === "torpedo" ? 0.14 : 0.09,
         slot,
         pool: key,
+        pixel: false,
       });
     }
     if (f.mag[w] <= 0 && f.reserve[w] > 0) this.startReload(f, now);
@@ -1113,12 +1218,13 @@ export class NexusArena {
       }
       if (explode) {
         const at = victim || wallT !== null ? hit.point : p.pos;
-        this.explode(at, p.dmg, p.splash, p.knock, p.owner, p.weapon, victim);
+        this.explode(at, p.dmg, p.splash, p.knock, p.owner, p.weapon, victim, p.pixel);
         (p.pool === "rocket" ? this.rockets : this.ions).hide(p.slot);
         this.projectiles.splice(i, 1);
       } else {
         (p.pool === "rocket" ? this.rockets : this.ions).move(p.slot, p.pos.x, p.pos.y, p.pos.z);
-        if (p.weapon === "ion") this.fx.trail(p.pos.x, p.pos.y, p.pos.z, WEAPON_META.ion.color);
+        if (p.pixel) this.fx.pixelTrail(p.pos.x, p.pos.y, p.pos.z);
+        else if (p.weapon === "ion") this.fx.trail(p.pos.x, p.pos.y, p.pos.z, WEAPON_META.ion.color);
         else if (p.weapon === "torpedo") this.fx.trail(p.pos.x, p.pos.y, p.pos.z, WEAPON_META.torpedo.color);
       }
     }
@@ -1134,9 +1240,12 @@ export class NexusArena {
     ownerId: string,
     weapon: WeaponId,
     direct: Fighter | null,
+    pixel = false,
   ) {
-    this.fx.explode(at.x, at.y, at.z, WEAPON_META[weapon].color);
-    this.arena.lights.flash(at.x, at.y, at.z, WEAPON_META[weapon].color, 26);
+    const color = pixel ? 0x7af0ff : WEAPON_META[weapon].color;
+    if (pixel) this.fx.pixelExplode(at.x, at.y, at.z);
+    else this.fx.explode(at.x, at.y, at.z, color);
+    this.arena.lights.flash(at.x, at.y, at.z, color, pixel ? 34 : 26);
     this.audio.explode();
     this.shake.add(ownerId === this.player.id ? 0.35 : 0.12);
     const owner = this.fighters.find((f) => f.id === ownerId) ?? null;
@@ -1155,7 +1264,8 @@ export class NexusArena {
       const nx = dist > 0.05 ? dx / dist : 0;
       const ny = dist > 0.05 ? Math.max(0.22, dy / dist) : 1;
       const nz = dist > 0.05 ? dz / dist : 0;
-      this.hurtFighter(f, dealt, owner, weapon, new THREE.Vector3(nx, ny, nz), kn, false);
+      const head = isDirect && at.y > f.pos.y + f.height * 0.72;
+      this.hurtFighter(f, dealt * (head ? 1.6 : 1), owner, weapon, new THREE.Vector3(nx, ny, nz), kn, head);
     }
   }
 
@@ -1209,7 +1319,43 @@ export class NexusArena {
     this.audio.death();
     if (attacker && attacker !== f) {
       attacker.frags += 1;
-      if (attacker.isPlayer) this.audio.frag();
+      if (attacker.isPlayer) {
+        const now = performance.now() / 1000;
+        if (now > this.streakUntil) this.streak = 0;
+        this.streak += 1;
+        this.streakUntil = now + 3.4;
+        let cr = headshot ? 22 : 14;
+        let pts = headshot ? 180 : 120;
+        let medal = headshot ? "HEADSHOT · +22 CR" : `ELIMINACIÓN · +${cr} CR`;
+        if (this.firstBlood) {
+          this.firstBlood = false;
+          cr += 18;
+          pts += 80;
+          medal = "PRIMERA SANGRE · +BONO";
+        }
+        if (this.streak === 2) {
+          cr += 16;
+          pts += 70;
+          medal = "DOBLE BAJA";
+        } else if (this.streak === 3) {
+          cr += 28;
+          pts += 120;
+          medal = "TRIPLE BAJA";
+        } else if (this.streak >= 4) {
+          cr += 36;
+          pts += 160;
+          medal = `MASACRE x${this.streak}`;
+        }
+        if (attacker.frags === 5) {
+          cr += 25;
+          medal = "RACHA x5";
+        } else if (attacker.frags === 10) {
+          cr += 45;
+          medal = "RACHA x10";
+        }
+        this.grant(cr, pts, medal);
+        this.audio.frag();
+      }
     } else if (f.isPlayer) {
       f.frags = Math.max(0, f.frags - 1);
     }
@@ -1229,6 +1375,9 @@ export class NexusArena {
       if (f.frags >= this.settings.fragLimit) {
         this.winner = f.name;
         this.matchOn = false;
+        if (f.isPlayer) {
+          this.grant(140, 650, "CAMPEÓN · +140 CR");
+        }
         this.unlock();
         this.setScreen("ended");
         try {
@@ -1241,6 +1390,22 @@ export class NexusArena {
         }
       }
     }
+  }
+
+  private finishRound() {
+    if (!this.matchOn) return;
+    const ranked = [...this.fighters]
+      .filter((f) => f.isPlayer || f.respawnAt !== 1e12)
+      .sort((a, b) => b.frags - a.frags || a.deaths - b.deaths);
+    this.winner = ranked[0]?.name ?? this.player.name;
+    this.matchOn = false;
+    if (ranked[0]?.isPlayer) {
+      this.grant(140, 650, "CAMPEÓN · +140 CR");
+    } else if (ranked[1]?.isPlayer) {
+      this.grant(45, 180, "SUBCAMPEÓN · +45 CR");
+    }
+    this.unlock();
+    this.setScreen("ended");
   }
 
   private separate() {
@@ -1383,14 +1548,18 @@ export class NexusArena {
   }
 
   private visuals(dt: number, now: number) {
-    this.renderer.toneMappingExposure = this.arena.lights.tick(now, dt, this.reducedMotion, this.camera);
-    this.fx.update(dt, this.camera);
+    const { camera, renderer, gunRoot, guns } = this.view;
+    renderer.toneMappingExposure = this.arena.lights.tick(now, dt, this.reducedMotion, camera);
+    this.fx.update(dt, camera);
     this.hitmarker = Math.max(0, this.hitmarker - dt);
     this.hurt = Math.max(0, this.hurt - dt);
     this.pickupT = Math.max(0, this.pickupT - dt);
     if (this.pickupT <= 0) this.pickupMsg = null;
     this.recoil = Math.max(0, this.recoil - dt * 1.8);
     this.muzzle = Math.max(0, this.muzzle - dt);
+    const targetFov = this.settings.fov * (this.input.aimHeld ? 0.68 : 1);
+    camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-14 * dt));
+    camera.updateProjectionMatrix();
     this.eyeY += ((this.input.crouching() ? CROUCH_EYE : EYE) - this.eyeY) * (1 - Math.exp(-12 * dt));
     this.landDip += (0 - this.landDip) * (1 - Math.exp(-10 * dt));
 
@@ -1405,8 +1574,8 @@ export class NexusArena {
     if (this.screen === "menu" || this.screen === "settings" || this.screen === "help" || this.screen === "ended") {
       this.orbitT += dt * 0.12;
       const r = 70;
-      this.camera.position.set(Math.sin(this.orbitT) * r, 24, Math.cos(this.orbitT) * r);
-      this.camera.lookAt(0, 2.2, 0);
+      camera.position.set(Math.sin(this.orbitT) * r, 24, Math.cos(this.orbitT) * r);
+      camera.lookAt(0, 2.2, 0);
       return;
     }
 
@@ -1420,51 +1589,47 @@ export class NexusArena {
     this.fovKick *= Math.exp(-7 * dt);
     const rushing = now < this.player.powers.rush;
     const wantFov = this.settings.fov + this.fovKick + (rushing ? 7 : 0);
-    if (Math.abs(this.camera.fov - wantFov) > 0.05) {
-      this.camera.fov = wantFov;
-      this.camera.updateProjectionMatrix();
+    if (Math.abs(camera.fov - wantFov) > 0.05) {
+      camera.fov = wantFov;
+      camera.updateProjectionMatrix();
     }
     if (rushing && spd > 5) {
       this.fx.rush(this.player.pos.x, this.player.pos.y + 0.4, this.player.pos.z, POWER_META.rush.color);
     }
 
-    this.camera.position.set(
+    camera.position.set(
       this.player.pos.x + shake.x,
       this.player.pos.y + this.eyeY + bobY + shake.y - this.landDip,
       this.player.pos.z + shake.z,
     );
-    this.camera.quaternion.setFromEuler(new THREE.Euler(this.player.pitch, this.player.yaw, 0, "YXZ"));
+    camera.quaternion.setFromEuler(new THREE.Euler(this.player.pitch, this.player.yaw, 0, "YXZ"));
 
     const rest = restPose(this.player.weapon);
-    this.gunRoot.position.set(
-      rest.x + bobX + this.swayX,
-      rest.y - this.recoil * 0.85 + bobY - this.swayY,
-      rest.z - this.recoil * 1.5,
+    const ads = adsPose(this.player.weapon);
+    this.adsT += ((this.input.aimHeld ? 1 : 0) - this.adsT) * (1 - Math.exp(-14 * dt));
+    const t = this.adsT;
+    gunRoot.position.set(
+      rest.x + (ads.x - rest.x) * t + bobX * (1 - t) + this.swayX * (1 - t * 0.7),
+      rest.y + (ads.y - rest.y) * t - this.recoil * (0.85 - t * 0.35) + bobY * (1 - t) - this.swayY * (1 - t),
+      rest.z + (ads.z - rest.z) * t - this.recoil * (1.5 - t * 0.4),
     );
-    this.gunRoot.rotation.set(this.recoil * 0.55 + this.swayY * 0.5, 0.05 + this.swayX * 0.6, this.recoil * 0.16);
-    for (const [id, g] of this.guns) {
+    gunRoot.rotation.set(
+      this.recoil * (0.55 - t * 0.38) + this.swayY * 0.5 * (1 - t),
+      (0.05 + this.swayX * 0.6) * (1 - t),
+      this.recoil * 0.16 * (1 - t * 0.7),
+    );
+    for (const [id, g] of guns) {
       g.visible = id === this.player.weapon && this.player.alive && this.screen === "playing";
-      const muzzle = g.getObjectByName("muzzle") as THREE.Mesh | undefined;
+      const muzzle = g.getObjectByName("muzzle");
       if (muzzle) {
-        const m = muzzle.material as THREE.MeshBasicMaterial;
-        m.opacity = this.muzzle > 0 ? 1 : 0;
+        muzzle.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          const m = mesh.material as THREE.MeshBasicMaterial | undefined;
+          if (m && m.opacity !== undefined) m.opacity = this.muzzle > 0 ? Math.min(1, this.muzzle * 8) : 0;
+        });
+        const flashScale = this.muzzle > 0 ? 0.85 + Math.random() * 0.55 : 0.01;
+        muzzle.scale.setScalar(flashScale);
       }
-    }
-  }
-
-  private render() {
-    const w = this.canvas.clientWidth || window.innerWidth;
-    const h = this.canvas.clientHeight || window.innerHeight;
-    const bufW = Math.floor(w * this.renderer.getPixelRatio());
-    const bufH = Math.floor(h * this.renderer.getPixelRatio());
-    if (this.renderer.domElement.width !== bufW || this.renderer.domElement.height !== bufH) {
-      this.resize();
-    }
-    this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
-    if (this.screen === "playing" && this.player.alive) {
-      this.renderer.clearDepth();
-      this.renderer.render(this.gunScene, this.gunCam);
     }
   }
 
@@ -1498,6 +1663,12 @@ export class NexusArena {
         }))
         .sort((a, b) => b.frags - a.frags || a.deaths - b.deaths),
       winner: this.winner,
+      roundSeconds: Math.ceil(this.roundSeconds),
+      credits: this.credits,
+      score: this.score,
+      grenades: p.grenades,
+      aiming: this.input.aimHeld,
+      streak: now < this.streakUntil ? this.streak : 0,
       locked: this.locked,
       yaw: p.yaw,
       speed: Math.hypot(p.vel.x, p.vel.z),

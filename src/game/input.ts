@@ -21,6 +21,11 @@ const GAME_CODES = new Set([
   "Digit4",
   "Digit5",
   "KeyP",
+  "KeyG",
+  "KeyN",
+  "KeyM",
+  "Comma",
+  "Period",
 ]);
 
 function radial(x: number, y: number, dz = 0.16): { x: number; y: number } {
@@ -39,6 +44,8 @@ export class GameInput {
   fireClicked = false;
   jumpClicked = false;
   reloadClicked = false;
+  grenadeClicked = false;
+  aimHeld = false;
   nextWeapon = 0;
   prevWeapon = 0;
   slot: number | null = null;
@@ -55,6 +62,7 @@ export class GameInput {
       if (GAME_CODES.has(e.code)) e.preventDefault();
       this.keys.add(e.code);
       if (e.code === "KeyR") this.reloadClicked = true;
+      if (e.code === "KeyG") this.grenadeClicked = true;
       if (e.code === "Space") this.jumpClicked = true;
       if (e.code === "Digit1") this.slot = 1;
       if (e.code === "Digit2") this.slot = 2;
@@ -80,9 +88,11 @@ export class GameInput {
         this.fireHeld = true;
         this.fireClicked = true;
       }
+      if (e.button === 2) this.aimHeld = true;
     };
     const onMouseUp = (e: MouseEvent) => {
       if (e.button === 0) this.fireHeld = false;
+      if (e.button === 2) this.aimHeld = false;
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -163,6 +173,7 @@ export class GameInput {
     } else if (this.padFire) {
       this.padFire = false;
       this.fireHeld = false;
+      this.aimHeld = false;
     }
     if (pad.buttons[0]?.pressed) this.jumpClicked = true;
     if (pad.buttons[2]?.pressed) this.reloadClicked = true;
@@ -201,6 +212,7 @@ export class GameInput {
     this.fireClicked = false;
     this.jumpClicked = false;
     this.reloadClicked = false;
+    this.grenadeClicked = false;
     this.nextWeapon = 0;
     this.prevWeapon = 0;
     this.slot = null;

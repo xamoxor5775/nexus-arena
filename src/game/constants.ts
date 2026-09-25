@@ -1,7 +1,9 @@
-import type { PowerId, Settings, WeaponId } from "./types";
+import type { PowerId, Settings, ShopItemId, WeaponId } from "./types";
 
 export const STEP = 1 / 60;
 export const MAX_ACCUM = 0.25;
+export const ROUND_SECONDS = 10 * 60;
+export const STARTING_GRENADES = 5;
 
 export const PLAYER_H = 1.76;
 export const CROUCH_H = 1.14;
@@ -164,9 +166,21 @@ export const POWER_META: Record<
   volt: { label: "MEGAVATIO", color: 0xff5a3a, css: "#ff5a3a", duration: 8.5, respawn: 24 },
 };
 
+export const SHOP_META: Record<ShopItemId, { label: string; cost: number; kind: "weapon" | "power"; color: string }> = {
+  pulse: { label: "PULSE", cost: 0, kind: "weapon", color: "#e8c36a" },
+  scatter: { label: "SCATTER", cost: 60, kind: "weapon", color: "#e24a2b" },
+  torpedo: { label: "TORPEDO", cost: 120, kind: "weapon", color: "#ff7a3a" },
+  lance: { label: "LANCE", cost: 160, kind: "weapon", color: "#2ee0c8" },
+  ion: { label: "ION", cost: 220, kind: "weapon", color: "#5aa8ff" },
+  rush: { label: "VELOCIDAD", cost: 45, kind: "power", color: "#ffc44d" },
+  blink: { label: "FASE", cost: 55, kind: "power", color: "#7af0ff" },
+  volt: { label: "MEGAVATIO", cost: 70, kind: "power", color: "#ff5a3a" },
+};
+
 export function isPower(k: string): k is PowerId {
   return k === "rush" || k === "blink" || k === "volt";
 }
 
 export const SETTINGS_KEY = "nexus-arena-settings-v1";
 export const BEST_KEY = "nexus-arena-best-v1";
+export const CREDITS_KEY = "nexus-arena-credits-v1";

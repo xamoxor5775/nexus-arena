@@ -179,36 +179,44 @@ function optic(k: Kit, z = 0.02) {
   return tag(g);
 }
 
-function glove(k: Kit) {
+function glove(k: Kit, side: 1 | -1 = 1) {
   const g = new THREE.Group();
-  g.add(box(k.glove, 0.078, 0.048, 0.1, 0.062, -0.125, 0.09, 0.35));
-  g.add(box(k.glove, 0.05, 0.04, 0.07, 0.055, -0.17, 0.12, 0.2));
+  const s = side;
+  g.add(box(k.glove, 0.078, 0.048, 0.1, 0.062 * s, -0.125, 0.09, 0.35));
+  g.add(box(k.glove, 0.05, 0.04, 0.07, 0.055 * s, -0.17, 0.12, 0.2));
   for (let i = 0; i < 4; i++) {
     const fy = -0.09 - i * 0.022;
-    g.add(box(k.glove, 0.022, 0.016, 0.05, 0.038, fy, 0.042, 0.15, 0, 0.4));
+    g.add(box(k.glove, 0.022, 0.016, 0.05, 0.038 * s, fy, 0.042, 0.15, 0, 0.4 * s));
   }
-  g.add(box(k.glove, 0.02, 0.018, 0.048, 0.012, -0.078, 0.12, 0.1, 0.4, 0.2));
-  g.add(box(k.dark, 0.03, 0.012, 0.04, 0.07, -0.11, 0.1));
+  g.add(box(k.glove, 0.02, 0.018, 0.048, 0.012 * s, -0.078, 0.12, 0.1, 0.4 * s, 0.2));
+  g.add(box(k.dark, 0.03, 0.012, 0.04, 0.07 * s, -0.11, 0.1));
   return tag(g);
 }
 
+function flashMat() {
+  return new THREE.MeshBasicMaterial({
+    color: 0xfff3d0,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+}
+
 function flash(id: WeaponId) {
-  const s = id === "scatter" ? 0.08 : id === "torpedo" ? 0.1 : 0.052;
-  const m = new THREE.Mesh(
-    new THREE.SphereGeometry(s, 10, 8),
-    new THREE.MeshBasicMaterial({
-      color: 0xfff3d0,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      toneMapped: false,
-    }),
-  );
-  m.name = "muzzle";
+  const g = new THREE.Group();
+  g.name = "muzzle";
+  const s = id === "scatter" ? 0.11 : id === "torpedo" ? 0.13 : id === "lance" ? 0.07 : 0.08;
+  const core = new THREE.Mesh(new THREE.SphereGeometry(s * 0.55, 10, 8), flashMat());
+  const blade = new THREE.Mesh(new THREE.PlaneGeometry(s * 3.4, s * 1.15), flashMat());
+  const blade2 = new THREE.Mesh(new THREE.PlaneGeometry(s * 1.2, s * 3.1), flashMat());
+  blade.rotation.y = Math.PI / 2;
+  g.add(core, blade, blade2);
   const z = id === "lance" ? -0.82 : id === "torpedo" ? -0.56 : id === "ion" ? -0.42 : id === "scatter" ? -0.52 : -0.5;
   const y = id === "torpedo" ? 0.06 : 0.036;
-  m.position.set(0, y, z);
-  return tag(m);
+  g.position.set(0, y, z);
+  return tag(g);
 }
 
 function buildPulse(k: Kit) {
@@ -229,6 +237,7 @@ function buildPulse(k: Kit) {
   g.add(box(k.accent, 0.012, 0.01, 0.16, 0.04, 0.05, -0.04));
   g.add(box(k.accent, 0.022, 0.008, 0.04, 0, 0.078, 0.12));
   g.add(cyl(k.dark, 0.012, 0.012, 0.06, 0.05, 0.01, 0.08, 8, 0));
+  g.add(box(k.chrome, 0.018, 0.018, 0.04, 0.046, 0.018, -0.16));
   g.add(glove(k));
   return g;
 }
@@ -251,7 +260,8 @@ function buildScatter(k: Kit) {
   g.add(trigger(k));
   g.add(pistolGrip(k));
   g.add(stock(k, 0.24));
-  g.add(glove(k));
+  g.add(glove(k, 1));
+  g.add(glove(k, -1));
   return g;
 }
 
@@ -272,7 +282,8 @@ function buildTorpedo(k: Kit) {
   g.add(pistolGrip(k));
   g.add(box(k.grip, 0.045, 0.08, 0.05, 0.09, -0.02, 0.14));
   g.add(stock(k, 0.32));
-  g.add(glove(k));
+  g.add(glove(k, 1));
+  g.add(glove(k, -1));
   return g;
 }
 
@@ -294,7 +305,8 @@ function buildLance(k: Kit) {
   g.add(trigger(k));
   g.add(pistolGrip(k));
   g.add(stock(k, 0.3));
-  g.add(glove(k));
+  g.add(glove(k, 1));
+  g.add(glove(k, -1));
   return g;
 }
 
@@ -340,17 +352,25 @@ export function buildViewmodel(id: WeaponId): THREE.Group {
             : buildIon(k);
   g.add(flash(id));
   g.layers.set(LAYER);
-  g.rotation.y = 0.035;
-  g.rotation.z = -0.028;
+  g.rotation.y = 0.02;
+  g.rotation.z = -0.018;
   return g;
 }
 
 export function restPose(id: WeaponId): THREE.Vector3 {
-  if (id === "lance") return new THREE.Vector3(0.24, -0.17, -0.52);
-  if (id === "torpedo") return new THREE.Vector3(0.255, -0.205, -0.48);
-  if (id === "scatter") return new THREE.Vector3(0.245, -0.18, -0.46);
-  if (id === "ion") return new THREE.Vector3(0.23, -0.155, -0.42);
-  return new THREE.Vector3(0.235, -0.155, -0.42);
+  if (id === "lance") return new THREE.Vector3(0.26, -0.185, -0.58);
+  if (id === "torpedo") return new THREE.Vector3(0.27, -0.22, -0.54);
+  if (id === "scatter") return new THREE.Vector3(0.262, -0.195, -0.52);
+  if (id === "ion") return new THREE.Vector3(0.248, -0.17, -0.48);
+  return new THREE.Vector3(0.252, -0.168, -0.48);
+}
+
+export function adsPose(id: WeaponId): THREE.Vector3 {
+  if (id === "lance") return new THREE.Vector3(0.012, -0.132, -0.46);
+  if (id === "torpedo") return new THREE.Vector3(0.03, -0.16, -0.44);
+  if (id === "scatter") return new THREE.Vector3(0.02, -0.145, -0.42);
+  if (id === "ion") return new THREE.Vector3(0.01, -0.125, -0.38);
+  return new THREE.Vector3(0.008, -0.122, -0.38);
 }
 
 export function buildWorldGun(gunMat: THREE.Material, dark: THREE.Material, glowMat: THREE.Material): THREE.Group {

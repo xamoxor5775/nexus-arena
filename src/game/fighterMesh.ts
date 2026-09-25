@@ -247,6 +247,12 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   };
   if (k === 0) root.scale.setScalar(1.06);
   if (k === 1) root.scale.setScalar(0.94);
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  });
   return root;
 }
 

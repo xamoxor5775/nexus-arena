@@ -35,6 +35,12 @@ const emptyHud: HudSnapshot = {
   speed: 0,
   alive: true,
   powers: [],
+  roundSeconds: 0,
+  credits: 0,
+  score: 0,
+  grenades: 2,
+  aiming: false,
+  streak: 0,
 };
 
 export type ArenaStore = {

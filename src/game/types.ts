@@ -1,5 +1,6 @@
 export type WeaponId = "pulse" | "scatter" | "torpedo" | "lance" | "ion";
 export type PowerId = "rush" | "blink" | "volt";
+export type ShopItemId = WeaponId | PowerId;
 
 export type Screen = "menu" | "playing" | "paused" | "ended" | "settings" | "help";
 
@@ -80,6 +81,12 @@ export type HudSnapshot = {
   speed: number;
   alive: boolean;
   powers: { id: PowerId; label: string; t: number; color: string }[];
+  roundSeconds: number;
+  credits: number;
+  score: number;
+  grenades: number;
+  aiming: boolean;
+  streak: number;
 };
 
 export type ControlsProbe = {
