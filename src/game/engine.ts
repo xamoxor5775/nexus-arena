@@ -44,6 +44,7 @@ import { accelerateWish, blockedAt, bodyBox, depenetrate, moveBody, overlaps, ra
 import { createArenaRenderer, type ArenaRenderer } from "./renderer";
 import type { ControlsProbe, HudSnapshot, KillFeedItem, PowerId, Screen, Settings, ShopItemId, WeaponId } from "./types";
 import { adsPose, restPose } from "./viewmodel";
+import { debugSpool } from "@/lib/debug-spool";
 
 export type { RemoteSnapshot } from "./network";
 
@@ -174,6 +175,7 @@ export class NexusArena {
   private hudClock = 0;
   private muzzle = 0;
   private adsT = 0;
+  private frameFails = 0;
   private streak = 0;
   private streakUntil = 0;
   private firstBlood = true;
@@ -252,6 +254,7 @@ export class NexusArena {
     this.setBotsVisible(this.settings.bots);
     this.credits = this.loadCredits();
     this.emitHud();
+    debugSpool.info("engine", "arena lista", { bots: this.settings.bots, low: this.reducedMotion });
   }
 
   start() {
@@ -606,18 +609,25 @@ export class NexusArena {
 
   private frame = (nowMs: number) => {
     if (this.disposed) return;
-    const now = nowMs / 1000;
-    const dt = this.loop.begin(nowMs);
-    this.input.pollGamepad();
-    this.loop.consumeFixed((step) => this.fixed(step, now));
-    this.visuals(dt, now);
-    this.view.render(this.screen === "playing" && this.player.alive);
-    this.hudClock += dt;
-    if (this.hudClock > 0.05) {
-      this.hudClock = 0;
-      this.emitHud();
+    try {
+      const now = nowMs / 1000;
+      const dt = this.loop.begin(nowMs);
+      this.input.pollGamepad();
+      this.loop.consumeFixed((step) => this.fixed(step, now));
+      this.visuals(dt, now);
+      this.view.render(this.screen === "playing" && this.player.alive);
+      this.hudClock += dt;
+      if (this.hudClock > 0.05) {
+        this.hudClock = 0;
+        this.emitHud();
+      }
+      this.input.endFrame();
+    } catch (err) {
+      if (this.frameFails < 24) {
+        this.frameFails += 1;
+        debugSpool.error("engine.frame", err, { n: this.frameFails });
+      }
     }
-    this.input.endFrame();
   };
 
   private fixed(dt: number, now: number) {
@@ -1548,7 +1558,7 @@ export class NexusArena {
   }
 
   private visuals(dt: number, now: number) {
-    const { camera, renderer, gunRoot, guns } = this.view;
+    const { camera, renderer, gunRoot, gunCam, guns } = this.view;
     renderer.toneMappingExposure = this.arena.lights.tick(now, dt, this.reducedMotion, camera);
     this.fx.update(dt, camera);
     this.hitmarker = Math.max(0, this.hitmarker - dt);
@@ -1557,7 +1567,7 @@ export class NexusArena {
     if (this.pickupT <= 0) this.pickupMsg = null;
     this.recoil = Math.max(0, this.recoil - dt * 1.8);
     this.muzzle = Math.max(0, this.muzzle - dt);
-    const targetFov = this.settings.fov * (this.input.aimHeld ? 0.68 : 1);
+    const targetFov = this.settings.fov * (this.input.aimHeld ? 0.84 : 1);
     camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-14 * dt));
     camera.updateProjectionMatrix();
     this.eyeY += ((this.input.crouching() ? CROUCH_EYE : EYE) - this.eyeY) * (1 - Math.exp(-12 * dt));
@@ -1608,18 +1618,24 @@ export class NexusArena {
     const ads = adsPose(this.player.weapon);
     this.adsT += ((this.input.aimHeld ? 1 : 0) - this.adsT) * (1 - Math.exp(-14 * dt));
     const t = this.adsT;
+    gunRoot.scale.setScalar(1.62 - 0.42 * t);
+    gunCam.fov = 42 - 6 * t;
+    gunCam.updateProjectionMatrix();
     gunRoot.position.set(
       rest.x + (ads.x - rest.x) * t + bobX * (1 - t) + this.swayX * (1 - t * 0.7),
       rest.y + (ads.y - rest.y) * t - this.recoil * (0.85 - t * 0.35) + bobY * (1 - t) - this.swayY * (1 - t),
       rest.z + (ads.z - rest.z) * t - this.recoil * (1.5 - t * 0.4),
     );
     gunRoot.rotation.set(
-      this.recoil * (0.55 - t * 0.38) + this.swayY * 0.5 * (1 - t),
+      -0.04 * t + this.recoil * (0.55 - t * 0.38) + this.swayY * 0.5 * (1 - t),
       (0.05 + this.swayX * 0.6) * (1 - t),
       this.recoil * 0.16 * (1 - t * 0.7),
     );
     for (const [id, g] of guns) {
       g.visible = id === this.player.weapon && this.player.alive && this.screen === "playing";
+      g.traverse((obj) => {
+        if (obj.name === "vm-sleeve") obj.visible = t < 0.45;
+      });
       const muzzle = g.getObjectByName("muzzle");
       if (muzzle) {
         muzzle.traverse((obj) => {

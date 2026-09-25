@@ -19,6 +19,120 @@ function configure(tex: THREE.Texture, wrap: THREE.Wrapping, repeatX: number, re
   return tex;
 }
 
+function makeCanvas(size: number): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  return c;
+}
+
+function fromCanvas(c: HTMLCanvasElement, repeatX: number, repeatY: number): THREE.CanvasTexture {
+  const tex = new THREE.CanvasTexture(c);
+  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, loDevice() ? 2 : 4);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function fillNoise(ctx: CanvasRenderingContext2D, size: number, amp: number) {
+  const img = ctx.getImageData(0, 0, size, size);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * amp;
+    d[i] = Math.max(0, Math.min(255, d[i] + n));
+    d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + n));
+    d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + n));
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+/** Acero cepillado procedural: no depende de JPG en el servidor. */
+export function gunMetalTex(repeatX = 2.4, repeatY = 1.6): THREE.Texture {
+  const key = `proc:gunmetal:${repeatX}:${repeatY}`;
+  const hit = texCache.get(key);
+  if (hit) return hit;
+  const size = 256;
+  const c = makeCanvas(size);
+  if (!c) {
+    const tex = new THREE.Texture();
+    texCache.set(key, tex);
+    return tex;
+  }
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#9aa4b0";
+  ctx.fillRect(0, 0, size, size);
+  const g = ctx.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, "#c5ccd4");
+  g.addColorStop(0.35, "#8d97a3");
+  g.addColorStop(0.7, "#b7c0c9");
+  g.addColorStop(1, "#7a8490");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalAlpha = 0.28;
+  for (let y = 0; y < size; y += 2) {
+    ctx.strokeStyle = y % 6 === 0 ? "#5c6570" : "#d7dee6";
+    ctx.lineWidth = y % 8 === 0 ? 1.4 : 0.6;
+    ctx.beginPath();
+    ctx.moveTo(0, y + Math.sin(y * 0.2) * 0.6);
+    ctx.lineTo(size, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 0.18;
+  for (let i = 0; i < 18; i++) {
+    ctx.fillStyle = i % 2 ? "#eef3f8" : "#4a515a";
+    ctx.fillRect(Math.random() * size, Math.random() * size, 8 + Math.random() * 40, 1 + Math.random() * 2);
+  }
+  ctx.globalAlpha = 1;
+  fillNoise(ctx, size, 22);
+  const tex = fromCanvas(c, repeatX, repeatY);
+  texCache.set(key, tex);
+  return tex;
+}
+
+/** Goma / polímero de grip: rombos y grano. */
+export function polymerTex(repeatX = 1.8, repeatY = 1.8): THREE.Texture {
+  const key = `proc:polymer:${repeatX}:${repeatY}`;
+  const hit = texCache.get(key);
+  if (hit) return hit;
+  const size = 256;
+  const c = makeCanvas(size);
+  if (!c) {
+    const tex = new THREE.Texture();
+    texCache.set(key, tex);
+    return tex;
+  }
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#3c4148";
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = "#2a2e34";
+  const step = 16;
+  for (let y = 0; y < size; y += step) {
+    for (let x = 0; x < size; x += step) {
+      const ox = (y / step) % 2 === 0 ? 0 : step / 2;
+      ctx.beginPath();
+      ctx.moveTo(x + ox + step / 2, y + 2);
+      ctx.lineTo(x + ox + step - 2, y + step / 2);
+      ctx.lineTo(x + ox + step / 2, y + step - 2);
+      ctx.lineTo(x + ox + 2, y + step / 2);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  ctx.strokeStyle = "#5a616a";
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.35;
+  for (let y = 0; y < size; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  fillNoise(ctx, size, 16);
+  const tex = fromCanvas(c, repeatX, repeatY);
+  texCache.set(key, tex);
+  return tex;
+}
+
 export function loadTex(url: string, repeatX: number, repeatY = repeatX): THREE.Texture {
   const hit = texCache.get(url);
   if (hit) return hit;

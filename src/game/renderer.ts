@@ -29,7 +29,7 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
   renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.32;
+  renderer.toneMappingExposure = 1.12;
   renderer.autoClear = false;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.autoUpdate = false;
@@ -38,25 +38,27 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
   const scene = new THREE.Scene();
   const gunScene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(fov, 1, 0.05, 420);
-  const gunCam = new THREE.PerspectiveCamera(42, 1, 0.04, 8);
+  const gunCam = new THREE.PerspectiveCamera(42, 1, 0.08, 8);
   gunCam.layers.set(1);
 
   const gunRoot = new THREE.Group();
-  gunRoot.scale.setScalar(1.52);
+  gunRoot.scale.setScalar(1.68);
   gunScene.add(gunRoot);
-  gunScene.add(new THREE.HemisphereLight(0xfff1e4, 0x241812, 0.72));
-  const key = new THREE.DirectionalLight(0xfff4e4, 3.15);
+  const hemi = new THREE.HemisphereLight(0xfff4ea, 0x3a2a22, 1.35);
+  const key = new THREE.DirectionalLight(0xfff6ea, 4.4);
   key.position.set(0.55, 1.35, 0.95);
-  gunScene.add(key);
-  const grim = new THREE.DirectionalLight(0x7af0e0, 0.48);
+  const grim = new THREE.DirectionalLight(0x9af5e8, 0.85);
   grim.position.set(-1.1, 0.25, -0.55);
-  gunScene.add(grim);
-  const fill = new THREE.DirectionalLight(0xff9a62, 0.62);
+  const fill = new THREE.DirectionalLight(0xffb07a, 1.15);
   fill.position.set(0.15, -0.55, 0.7);
-  gunScene.add(fill);
-  const top = new THREE.DirectionalLight(0xfff8ee, 0.58);
+  const top = new THREE.DirectionalLight(0xfff8ee, 1.05);
   top.position.set(0.1, 1.7, 0.35);
-  gunScene.add(top);
+  const rim = new THREE.PointLight(0xffe4c4, 3.2, 5, 1.2);
+  rim.position.set(0.12, 0.18, 0.42);
+  for (const light of [hemi, key, grim, fill, top, rim]) {
+    light.layers.enableAll();
+    gunScene.add(light);
+  }
 
   const guns = new Map<WeaponId, THREE.Group>();
   for (const id of WEAPON_ORDER) {

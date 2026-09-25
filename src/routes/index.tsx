@@ -13,11 +13,30 @@ function Home() {
   const grantAccess = useCallback(() => setEntered(true), []);
 
   useEffect(() => {
-    fetch("/api/access/me", { credentials: "same-origin", cache: "no-store" })
-      .then((response) => { if (response.ok) setEntered(true); })
-      .finally(() => setChecking(false));
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 5000);
+    fetch("/api/access/me", { credentials: "same-origin", cache: "no-store", signal: ctrl.signal })
+      .then((response) => {
+        if (response.ok) setEntered(true);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        window.clearTimeout(timer);
+        setChecking(false);
+      });
+    return () => {
+      window.clearTimeout(timer);
+      ctrl.abort();
+    };
   }, []);
 
-  if (checking) return <div className="access-checking">VERIFICANDO ACCESO…</div>;
-  return entered ? <NexusApp autoStart /> : <LandingPage onAccessGranted={grantAccess} />;
+  if (checking) {
+    return (
+      <div className="access-checking">
+        <span className="landing-brand-mark" aria-hidden="true"><b>N</b><i /></span>
+        VERIFICANDO ACCESO…
+      </div>
+    );
+  }
+  return entered ? <NexusApp /> : <LandingPage onAccessGranted={grantAccess} />;
 }

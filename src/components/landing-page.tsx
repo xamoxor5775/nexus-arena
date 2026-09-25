@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Crosshair, Gamepad2, ShieldCheck, Volume2, VolumeX, Zap } from "lucide-react";
 import type { ReactNode } from "react";
+import { debugSpool } from "@/lib/debug-spool";
+import { trackBeginCheckout, trackEnterArena, trackPurchase } from "@/lib/google-ads";
 
 export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }) {
   const [email, setEmail] = useState("");
@@ -11,6 +13,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
   const [accessToken, setAccessToken] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenEntry, setShowTokenEntry] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const tokenInputRef = useRef<HTMLInputElement>(null);
@@ -35,6 +38,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
         if (response.ok && body.access && token) {
           setAccessToken(token);
           setMessage("Pago confirmado. Guarda tu llave antes de entrar.");
+          trackPurchase(flowOrder);
           return;
         }
         setAccessToken("");
@@ -74,8 +78,11 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.url) throw new Error(body.error || "Checkout no disponible");
-      window.location.assign(body.url);
+      debugSpool.info("landing.checkout", "redirigiendo a Flow");
+      const checkoutUrl = String(body.url);
+      trackBeginCheckout(() => window.location.assign(checkoutUrl));
     } catch (error) {
+      debugSpool.error("landing.checkout", error);
       setMessage(error instanceof Error ? error.message : "No pudimos iniciar el pago.");
       setBusy(false);
     }
@@ -107,8 +114,10 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "La llave no permite el acceso.");
       setTokenMessage("LLAVE CONFIRMADA. ENTRANDO A LA ARENA…");
+      trackEnterArena();
       onAccessGranted();
     } catch (error) {
+      debugSpool.warn("landing.enter", error instanceof Error ? error.message : "llave rechazada");
       const detail = error instanceof Error ? error.message : "No pudimos validar la llave.";
       setTokenMessage(detail);
       setMessage(detail);
@@ -155,6 +164,21 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
     setTokenMessage("");
   }
 
+  function focusCheckout() {
+    document.getElementById("checkout-nombre")?.focus();
+    document.getElementById("checkout-pendiente")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function copyToken() {
+    try {
+      await navigator.clipboard.writeText(accessToken);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setMessage("No se pudo copiar. Selecciona la llave a mano.");
+    }
+  }
+
   return (
     <main className="landing-shell">
       <div className="landing-grid" />
@@ -180,7 +204,8 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
               </div>
               <input ref={tokenInputRef} name="token" type="text" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Pega aquí tu token" aria-label="Llave de acceso" autoComplete="off" spellCheck={false} disabled={busy} autoFocus />
               {tokenMessage && <p className="landing-token-popover-message" role="status">{tokenMessage}</p>}
-              <p className="landing-token-popover-hint">Pega la llave y pulsa ACCEDER, o Enter. Vale 30 días.</p>
+              <button type="submit" className="landing-token-submit" disabled={busy}>{busy ? "VALIDANDO…" : "ENTRAR"}</button>
+              <p className="landing-token-popover-hint">Pega la llave y pulsa ENTRAR. Vale 30 días.</p>
             </form>
           )}
           <span className="landing-status"><i /> SERVIDORES ONLINE</span>
@@ -193,15 +218,21 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
           <h1>Entra.<br /><em>Apunta.</em><br />Domina.</h1>
           <p className="landing-lede">Deathmatch FPS en el navegador. Cinco armas, bots letales y una arena industrial. Compra, guarda tu llave y entra cuando quieras durante 30 días.</p>
           <div className="landing-actions">
-            <div className="landing-buy">
+            <button type="button" className="landing-buy" onClick={focusCheckout}>
               <span><strong>$1.000</strong><small>ACCESO POR 30 DÍAS · CLP</small></span>
               <ArrowRight />
-            </div>
-            <div className="landing-checkout">
-              <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Nombre completo" aria-label="Nombre completo" autoComplete="name" required disabled={busy} />
+            </button>
+            <form
+              className="landing-checkout"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void startCheckout();
+              }}
+            >
+              <input id="checkout-nombre" type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Nombre completo" aria-label="Nombre completo" autoComplete="name" required disabled={busy} />
               <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Tu correo" aria-label="Correo para comprar acceso" autoComplete="email" inputMode="email" required disabled={busy} />
-              <button type="button" onClick={startCheckout} disabled={busy}>{busy ? "PROCESANDO..." : "COMPRAR CON FLOW"}</button>
-            </div>
+              <button type="submit" disabled={busy}>{busy ? "PROCESANDO..." : "COMPRAR CON FLOW"}</button>
+            </form>
           </div>
           <p id="checkout-pendiente" className="landing-note">Pago único · Flow Chile · la llave se entrega solo si el pago está confirmado</p>
           {message && <p className="landing-message" role="status">{message}</p>}
@@ -209,13 +240,14 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
             <form id="token-entry" className="landing-token-entry" onSubmit={submitToken}>
               <strong>INGRESA TU LLAVE DE ACCESO</strong>
               <input name="token" type="text" value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Pega aquí tu token" aria-label="Llave de acceso" autoComplete="off" spellCheck={false} disabled={busy} />
+              <button type="submit" disabled={busy}>{busy ? "VALIDANDO…" : "ENTRAR"}</button>
             </form>
           )}
           {accessToken && (
             <div className="landing-token">
               <strong>GUARDA ESTA LLAVE DE ACCESO</strong>
               <code>{accessToken}</code>
-              <button type="button" onClick={() => navigator.clipboard?.writeText(accessToken)}>COPIAR TOKEN</button>
+              <button type="button" onClick={() => void copyToken()}>{copied ? "COPIADA" : "COPIAR TOKEN"}</button>
               <button type="button" onClick={() => void activateToken(accessToken)} disabled={busy}>{busy ? "VALIDANDO..." : "ENTRAR A LA ARENA"}</button>
             </div>
           )}

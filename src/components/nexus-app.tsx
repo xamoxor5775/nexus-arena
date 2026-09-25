@@ -6,6 +6,7 @@ import { P2PRoom } from "@/lib/multiplayer";
 import type { ShopItemId } from "@/game/types";
 import { useArena } from "@/game/store";
 import { arenaRadio } from "@/game/radio";
+import { debugSpool } from "@/lib/debug-spool";
 
 export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSeconds?: number; autoStart?: boolean; onDemoEnd?: () => void } = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -22,7 +23,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
   const [radioTick, setRadioTick] = useState(0);
-  const worldRev = 23;
+  const worldRev = 25;
 
   useEffect(() => {
     useArena.getState().setTouch(
@@ -55,18 +56,23 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
     let disposed = false;
     let game: NexusArena | null = null;
     (async () => {
-      const { NexusArena } = await import("@/game/engine");
-      if (disposed || !canvasRef.current) return;
-      const store = useArena.getState();
-      game = new NexusArena(canvasRef.current, store.settings, {
-        onHud: (h) => useArena.getState().setHud(h),
-        onScreen: (s) => useArena.getState().setScreen(s),
-        onLock: () => {},
-      });
-      gameRef.current = game;
-      (window as unknown as { __nexus?: NexusArena }).__nexus = game;
-      game.start();
-      if (autoStart) window.setTimeout(() => game?.beginMatch(), 180);
+      try {
+        const { NexusArena } = await import("@/game/engine");
+        if (disposed || !canvasRef.current) return;
+        const store = useArena.getState();
+        game = new NexusArena(canvasRef.current, store.settings, {
+          onHud: (h) => useArena.getState().setHud(h),
+          onScreen: (s) => useArena.getState().setScreen(s),
+          onLock: () => {},
+        });
+        gameRef.current = game;
+        (window as unknown as { __nexus?: NexusArena }).__nexus = game;
+        game.start();
+        debugSpool.info("app", "motor iniciado");
+        if (autoStart) window.setTimeout(() => game?.beginMatch(), 180);
+      } catch (err) {
+        debugSpool.error("app.engine", err);
+      }
     })();
     return () => {
       disposed = true;
@@ -179,7 +185,18 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   }, []);
 
   const play = useCallback(() => {
-    gameRef.current?.beginMatch();
+    let tries = 0;
+    const run = () => {
+      const g = gameRef.current;
+      if (!g) {
+        if (tries++ < 40) window.setTimeout(run, 50);
+        else debugSpool.error("app.play", "el motor no arrancó");
+        return;
+      }
+      debugSpool.info("app.play", "iniciar ronda");
+      g.beginMatch();
+    };
+    run();
   }, []);
 
   return (
@@ -257,32 +274,39 @@ function MenuLayer({
               <span className="nx-ink font-medium">El primero</span> en el límite de frags se queda el pozo.
             </p>
           </div>
-          <aside className="nx-plate hidden w-60 p-4 sm:block">
-            <p className="nx-kicker flex items-center justify-between gap-2 text-[10px] text-health">
-              <span>
-                <i className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
-                {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
-              </span>
+          <aside className="nx-statcard w-full sm:w-72">
+            <p className="nx-statcard-live">
+              <i />
+              {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en el pozo
             </p>
-            <p className="nx-ink nx-kicker mt-3 text-ion">Stats · Core Power</p>
-            <ul className="nx-copy nx-stat mt-3 space-y-1.5">
-              <li className="flex justify-between">
-                Armas <span className="nx-ink font-semibold">5</span>
+            <p className="nx-statcard-kicker">Núcleo de la arena</p>
+            <p className="nx-statcard-lead">Lo que vas a encontrar al entrar. El límite de frags se cambia en Ajustes.</p>
+            <ul className="nx-statcard-list">
+              <li>
+                <span>Arsenal</span>
+                <b>5 armas</b>
               </li>
-              <li className="flex justify-between">
-                Jump pads <span className="nx-ink font-semibold">10</span>
+              <li>
+                <span>Impulso</span>
+                <b>10 jump pads</b>
               </li>
-              <li className="flex justify-between">
-                Mapa <span className="nx-ink font-semibold">88 m</span>
+              <li>
+                <span>Pozo</span>
+                <b>88 m de arena</b>
               </li>
-              <li className="flex justify-between">
-                Límite <span className="nx-ink font-semibold">{settings.fragLimit}</span>
+              <li>
+                <span>Frag límite</span>
+                <b>{settings.fragLimit} bajas</b>
               </li>
-              <li className="flex justify-between">
-                Mejor <span className="nx-ink font-semibold">{best}</span>
+              <li>
+                <span>Tu récord</span>
+                <b>{best > 0 ? `${best} frags` : "sin marca"}</b>
               </li>
             </ul>
-            <Schematic className="mt-3 h-16 w-full text-faint" />
+            <div className="nx-statcard-plan">
+              <Schematic className="h-12 w-full" />
+              <span>Plano del pozo</span>
+            </div>
           </aside>
         </header>
 
@@ -293,26 +317,21 @@ function MenuLayer({
           <div className="nx-hull-bars nx-hull-bars-bot" />
         </div>
 
-        <footer className="relative z-10 grid gap-2 px-3 py-2 sm:grid-cols-[minmax(0,18rem)_1fr_auto] sm:items-end sm:gap-3 sm:px-8 sm:py-4 sm:pb-6">
-          {screen === "menu" && (
-            <nav className="grid grid-cols-3 gap-2 sm:flex sm:flex-col">
-              <SteelBtn primary onClick={onPlay} icon={<Play className="size-4" />}>
-                Jugar
-              </SteelBtn>
-              <SteelBtn onClick={() => setScreen("help")} icon={<BookOpen className="size-4" />}>
-                <span className="sm:hidden">Guía</span>
-                <span className="hidden sm:inline">Cómo jugar</span>
-              </SteelBtn>
-              <SteelBtn onClick={() => setScreen("settings")} icon={<SettingsIcon className="size-4" />}>
-                Ajustes
-              </SteelBtn>
-            </nav>
-          )}
-          {screen === "settings" && <SettingsPanel onBack={() => setScreen("menu")} />}
-          {screen === "help" && <HelpPanel onBack={() => setScreen("menu")} />}
+        <footer className="relative z-10 grid gap-2 px-3 py-2 sm:grid-cols-[minmax(0,20rem)_1fr_auto] sm:items-end sm:gap-3 sm:px-8 sm:py-4 sm:pb-6">
+          <nav className="nx-menu-nav" aria-label="Comandos de la arena">
+            <SteelBtn primary hint="Entra al pozo · ronda ahora" onClick={onPlay} icon={<Play className="size-4" />}>
+              Jugar
+            </SteelBtn>
+            <SteelBtn tone="guide" hint="Controles, armas y pads" onClick={() => setScreen("help")} icon={<BookOpen className="size-4" />}>
+              Cómo jugar
+            </SteelBtn>
+            <SteelBtn tone="gear" hint="Nombre, bots y sensibilidad" onClick={() => setScreen("settings")} icon={<SettingsIcon className="size-4" />}>
+              Ajustes
+            </SteelBtn>
+          </nav>
 
           {screen === "menu" && (
-            <div className="hidden flex-col items-center justify-end gap-2 sm:flex">
+            <div className="flex flex-col items-center justify-end gap-2">
               <Schematic className="h-16 w-36 text-faint" />
               <div className="flex items-center gap-1">
                 <button type="button" className="nx-kicker min-h-11 min-w-11 text-ion" onClick={() => arenaRadio.prev()} aria-label="Tema anterior">
@@ -330,7 +349,7 @@ function MenuLayer({
           )}
 
           {screen === "menu" && (
-            <div className="nx-plate hidden items-center gap-4 px-4 py-3 sm:flex">
+            <div className="nx-plate flex items-center gap-4 px-4 py-3">
               <div>
                 <p className="nx-copy nx-kicker">Dotación</p>
                 <p className="nx-ink nx-num text-4xl">{1 + settings.bots}</p>
@@ -340,6 +359,28 @@ function MenuLayer({
             </div>
           )}
         </footer>
+
+        {(screen === "settings" || screen === "help") && (
+          <div
+            className="nx-modal-scrim"
+            role="presentation"
+            onClick={() => setScreen("menu")}
+          >
+            <div
+              className="nx-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={screen === "help" ? "nx-help-title" : "nx-settings-title"}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {screen === "settings" ? (
+                <SettingsPanel onBack={() => setScreen("menu")} />
+              ) : (
+                <HelpPanel onBack={() => setScreen("menu")} />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -349,7 +390,7 @@ function RadioDock({ tick }: { tick: number }) {
   void tick;
   const snap = arenaRadio.snapshot();
   return (
-    <div className="pointer-events-auto absolute left-3 top-24 z-30 flex max-w-[min(92vw,22rem)] items-center gap-1 rounded-sm border border-ion/40 bg-bg/80 px-2 py-1.5 sm:left-5 sm:top-28">
+    <div className="pointer-events-auto absolute bottom-36 left-3 z-30 flex max-w-[min(92vw,22rem)] items-center gap-1 rounded-sm border border-ion/40 bg-bg/85 px-2 py-1.5 sm:bottom-32 sm:left-auto sm:right-4 sm:top-auto">
       <button type="button" className="nx-kicker min-h-11 min-w-11 text-ion" onClick={() => arenaRadio.prev()} aria-label="Tema anterior">
         <SkipBack className="mx-auto size-4" />
       </button>
@@ -415,16 +456,28 @@ function SteelBtn({
   onClick,
   icon,
   primary,
+  hint,
+  tone,
 }: {
   children: ReactNode;
   onClick: () => void;
   icon?: ReactNode;
   primary?: boolean;
+  hint?: string;
+  tone?: "guide" | "gear";
 }) {
+  const kind = primary ? "play" : tone === "guide" ? "guide" : tone === "gear" ? "gear" : "idle";
   return (
-    <button type="button" onClick={onClick} className={`nx-plate nx-btn ${primary ? "nx-btn-primary" : ""}`}>
-      {icon}
-      {children}
+    <button type="button" onClick={onClick} className={`nx-cmd nx-cmd-${kind}`}>
+      {icon ? (
+        <span className="nx-cmd-glyph" aria-hidden>
+          {icon}
+        </span>
+      ) : null}
+      <span className="nx-cmd-copy">
+        <span className="nx-cmd-title">{children}</span>
+        {hint ? <span className="nx-cmd-hint">{hint}</span> : null}
+      </span>
     </button>
   );
 }
@@ -433,27 +486,41 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
   const settings = useArena((s) => s.settings);
   const patch = useArena((s) => s.patchSettings);
   return (
-    <div className="nx-plate max-h-[42vh] w-full max-w-md overflow-y-auto p-4">
-      <h2 className="nx-ink nx-heading">Ajustes</h2>
-      <label className="nx-copy nx-body mt-3 block text-sm">
-        Nombre
+    <>
+      <header className="nx-modal-head">
+        <div>
+          <p className="nx-kicker text-ion">Panel de piloto</p>
+          <h2 id="nx-settings-title" className="nx-ink nx-heading">
+            Ajustes
+          </h2>
+          <p className="nx-copy nx-body mt-1">Cambia el nombre, el mouse y cuántos bots entran a la ronda.</p>
+        </div>
+        <button type="button" className="nx-modal-x" onClick={onBack} aria-label="Cerrar ajustes">
+          ×
+        </button>
+      </header>
+      <label className="nx-copy nx-body mt-4 block text-sm">
+        Tu nombre en el marcador
         <input
-          className="mt-1 h-11 w-full border border-border bg-bg px-3 font-sans text-base text-fg outline-none focus:border-ion"
+          className="mt-1 h-11 w-full border border-border bg-bg px-3 font-sans text-base text-fg outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ion"
           value={settings.name}
           maxLength={14}
           onChange={(e) => patch({ name: e.target.value })}
         />
       </label>
-      <Slider label="Sensibilidad" value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />
-      <Slider label="FOV" value={settings.fov} min={70} max={100} step={1} onChange={(v) => patch({ fov: v })} />
-      <Slider label="Volumen" value={settings.volume} min={0} max={1} step={0.02} onChange={(v) => patch({ volume: v })} />
-      <Slider label="Cámara" value={settings.shake} min={0} max={1} step={0.05} onChange={(v) => patch({ shake: v })} />
-      <Slider label="Bots" value={settings.bots} min={1} max={4} step={1} onChange={(v) => patch({ bots: v })} />
-      <Slider label="Límite de frags" value={settings.fragLimit} min={5} max={30} step={1} onChange={(v) => patch({ fragLimit: v })} />
-      <div className="mt-4">
-        <SteelBtn onClick={onBack}>Volver</SteelBtn>
+      <div className="nx-modal-grid">
+        <Slider label="Sensibilidad del mouse" value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />
+        <Slider label="Campo de visión (FOV)" value={settings.fov} min={70} max={100} step={1} suffix="°" onChange={(v) => patch({ fov: v })} />
+        <Slider label="Volumen de radio y disparos" value={settings.volume} min={0} max={1} step={0.02} pct onChange={(v) => patch({ volume: v })} />
+        <Slider label="Temblor de cámara" value={settings.shake} min={0} max={1} step={0.05} pct onChange={(v) => patch({ shake: v })} />
+        <Slider label="Bots rivales" value={settings.bots} min={1} max={4} step={1} onChange={(v) => patch({ bots: v })} />
+        <Slider label="Frags para ganar la ronda" value={settings.fragLimit} min={5} max={30} step={1} onChange={(v) => patch({ fragLimit: v })} />
       </div>
-    </div>
+      <div className="nx-modal-actions">
+        <SteelBtn onClick={onBack}>Listo</SteelBtn>
+        <SteelBtn onClick={() => debugSpool.download()}>Descargar spool</SteelBtn>
+      </div>
+    </>
   );
 }
 
@@ -464,6 +531,8 @@ function Slider({
   max,
   step,
   onChange,
+  suffix = "",
+  pct = false,
 }: {
   label: string;
   value: number;
@@ -471,14 +540,15 @@ function Slider({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  suffix?: string;
+  pct?: boolean;
 }) {
+  const shown = pct ? `${Math.round(value * 100)}%` : Number.isInteger(step) && step >= 1 ? `${value}${suffix}` : `${value.toFixed(2)}${suffix}`;
   return (
-    <label className="nx-copy nx-body mt-3 block text-sm">
-      <span className="flex justify-between">
+    <label className="nx-copy nx-body mt-0 block text-sm">
+      <span className="flex justify-between gap-3">
         {label}
-        <span className="nx-stat text-fg">
-          {Number.isInteger(step) && step >= 1 ? value : value.toFixed(2)}
-        </span>
+        <span className="nx-stat text-fg">{shown}</span>
       </span>
       <input
         type="range"
@@ -493,50 +563,80 @@ function Slider({
   );
 }
 
+function KeyRow({ keys, action }: { keys: string[]; action: string }) {
+  return (
+    <li className="nx-keyrow">
+      <span className="nx-keyrow-keys">
+        {keys.map((k) => (
+          <kbd key={k} className="nx-key">
+            {k}
+          </kbd>
+        ))}
+      </span>
+      <span className="nx-keyrow-action">{action}</span>
+    </li>
+  );
+}
+
 function HelpPanel({ onBack }: { onBack: () => void }) {
   return (
-    <div className="nx-plate max-h-[42vh] w-full max-w-md overflow-y-auto p-4">
-      <h2 className="nx-ink nx-heading">Cómo jugar</h2>
-      <ul className="nx-copy nx-body mt-4 space-y-2">
-        <li>
-          <span className="nx-stat text-fg">WASD</span> mover ·{" "}
-          <span className="nx-stat text-fg">Mouse</span> apuntar
-        </li>
-        <li>
-          <span className="nx-stat text-fg">Click</span> disparar ·{" "}
-          <span className="nx-stat text-fg">Espacio</span> saltar
-        </li>
-        <li>
-          <span className="nx-stat text-fg">Shift</span> sprint ·{" "}
-          <span className="nx-stat text-fg">C</span> agachar
-        </li>
-        <li>
-          <span className="nx-stat text-fg">1-5</span> armas ·{" "}
-          <span className="nx-stat text-fg">R</span> recargar ·{" "}
-          <span className="nx-stat text-fg">Tab</span> marcador
-        </li>
-        <li>
-          <span className="nx-stat text-fg">Click derecho</span> zoom ·{" "}
-          <span className="nx-stat text-fg">G</span> granada de píxeles ·{" "}
-          <span className="nx-stat text-fg">B</span> armería
-        </li>
-        <li>
-          <span className="nx-stat text-fg">N</span> siguiente tema ·{" "}
-          <span className="nx-stat text-fg">M</span> tema anterior
-        </li>
-        <li>Los disparos a la cabeza infligen daño crítico. Los botiquines restauran salud.</li>
-        <li>Pads cian te lanzan. Torpedo a los pies = rocket jump.</li>
-        <li>
-          Iconos flotantes: <span className="text-fg">VELOCIDAD</span> sprint + doble salto,{" "}
-          <span className="text-fg">FASE</span> salto en el aire = blink,{" "}
-          <span className="text-fg">MEGAVATIO</span> daño y cadena.
-        </li>
-        <li>Recoge salud, armadura y armas. Megahealth se drena.</li>
-      </ul>
-      <div className="mt-4">
-        <SteelBtn onClick={onBack}>Volver</SteelBtn>
+    <>
+      <header className="nx-modal-head">
+        <div>
+          <p className="nx-kicker text-ion">Manual de arena</p>
+          <h2 id="nx-help-title" className="nx-ink nx-heading">
+            Cómo jugar
+          </h2>
+          <p className="nx-copy nx-body mt-1">Deathmatch. El primero en el límite de frags se queda el pozo.</p>
+        </div>
+        <button type="button" className="nx-modal-x" onClick={onBack} aria-label="Cerrar cómo jugar">
+          ×
+        </button>
+      </header>
+      <div className="nx-help-cols">
+        <section>
+          <h3 className="nx-modal-h">Controles</h3>
+          <ul className="nx-keylist">
+            <KeyRow keys={["W", "A", "S", "D"]} action="Moverte" />
+            <KeyRow keys={["Mouse"]} action="Apuntar" />
+            <KeyRow keys={["Click izq."]} action="Disparar" />
+            <KeyRow keys={["Click der."]} action="Mira / zoom" />
+            <KeyRow keys={["Espacio"]} action="Saltar" />
+            <KeyRow keys={["Shift"]} action="Sprint" />
+            <KeyRow keys={["C"]} action="Agacharte" />
+            <KeyRow keys={["1", "2", "3", "4", "5"]} action="Cambiar arma" />
+            <KeyRow keys={["R"]} action="Recargar" />
+            <KeyRow keys={["G"]} action="Granada de píxeles" />
+            <KeyRow keys={["B"]} action="Tienda" />
+            <KeyRow keys={["Tab"]} action="Marcador" />
+            <KeyRow keys={["Esc"]} action="Pausa" />
+            <KeyRow keys={["N", "M"]} action="Radio: siguiente / anterior" />
+          </ul>
+        </section>
+        <section>
+          <h3 className="nx-modal-h">Armas</h3>
+          <ul className="nx-helplist">
+            {WEAPON_ORDER.map((id) => (
+              <li key={id}>
+                <b>{WEAPON_META[id].slot}</b> {WEAPON_META[id].label}
+              </li>
+            ))}
+          </ul>
+          <h3 className="nx-modal-h">En el pozo</h3>
+          <ul className="nx-helplist nx-helplist-copy">
+            <li>Headshot hace daño crítico. Recoge salud y armadura.</li>
+            <li>Los pads cian te lanzan. Torpedo a los pies = rocket jump.</li>
+            <li>
+              <b>VELOCIDAD</b> sprint y doble salto. <b>FASE</b> blink en el aire. <b>MEGAVATIO</b> más daño.
+            </li>
+            <li>Megahealth se drena. Gana quien llega primero al límite de frags.</li>
+          </ul>
+        </section>
       </div>
-    </div>
+      <div className="nx-modal-actions nx-modal-actions-solo">
+        <SteelBtn onClick={onBack}>Entendido</SteelBtn>
+      </div>
+    </>
   );
 }
 
@@ -554,7 +654,11 @@ function HudLayer({ onShop }: { onShop: () => void }) {
           strokeWidth={1.75}
         />
       </div>
-      {hud.aiming && <div className="absolute inset-[18%] rounded-full border border-ion/35" />}
+      {hud.aiming && (
+        <div className="nx-ads" aria-hidden>
+          <span className="nx-ads-ring" />
+        </div>
+      )}
 
       <div className="absolute left-1/2 top-5 -translate-x-1/2 text-center sm:top-8">
         <p className="nx-kicker text-ion">RONDA {formatRoundTime(hud.roundSeconds)}</p>
@@ -666,7 +770,9 @@ function ShopLayer({ gameRef, onClose }: { gameRef: { current: NexusArena | null
             <h2 className="nx-ink nx-heading mt-1 text-3xl">Compra con créditos</h2>
             <p className="nx-copy nx-stat mt-2">Saldo: <span className="text-ion">{hud.credits} CR</span> · cada ronda dura 10:00</p>
           </div>
-          <button type="button" className="nx-btn" onClick={onClose}>Cerrar</button>
+          <button type="button" className="nx-kicker min-h-11 shrink-0 border border-ion/40 px-3 text-ion" onClick={onClose}>
+            Cerrar
+          </button>
         </div>
         <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {items.map((id) => {
