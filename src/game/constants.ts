@@ -14,13 +14,14 @@ export const CROUCH_EYE = 1.02;
 export const GRAVITY = 24.5;
 export const JUMP_VEL = 10.4;
 export const GROUND_ACCEL = 20;
-export const AIR_ACCEL = 16;
+export const AIR_ACCEL = 28;
 export const FRICTION = 5.2;
 export const STOP_SPEED = 1.15;
 export const MAX_GROUND = 9.8;
-export const MAX_AIR = 10.2;
+export const MAX_AIR = 13;
 export const SPRINT = 1.22;
-export const AIR_WISH_CAP = 4.4;
+/** Tope del wish en el aire. Más alto que el suelo deja que el strafe sume velocidad, como en Quake. */
+export const AIR_WISH_CAP = 8;
 export const STEP_HEIGHT = 0.52;
 export const GROUND_SNAP = 0.5;
 export const COYOTE = 0.2;
@@ -34,6 +35,8 @@ export const DEFAULT_SETTINGS: Settings = {
   shake: 1,
   bots: 4,
   fragLimit: 15,
+  arena: "pozo",
+  mode: "ffa",
 };
 
 export const BOT_NAMES = ["Gladiador", "Operadora", "Ingeniero", "Nyx"] as const;

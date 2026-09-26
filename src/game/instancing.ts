@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
+const _upAxis = new THREE.Vector3(0, 1, 0);
+const _instDir = new THREE.Vector3();
+
 type BoxSpec = { x: number; y: number; z: number; w: number; h: number; d: number };
 
 const _dummy = new THREE.Object3D();
@@ -116,8 +119,25 @@ export function instanceCylinders(
   rTop: number,
   rBot: number,
   h: number,
+  radialSegments = 16,
 ): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
-  const geo = new THREE.CylinderGeometry(rTop, rBot, h, 16);
+  const geo = new THREE.CylinderGeometry(rTop, rBot, h, radialSegments);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
+  });
+  return { mesh, geo };
+}
+
+export function instanceCones(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  rBot: number,
+  h: number,
+  radialSegments = 12,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.ConeGeometry(rBot, h, radialSegments);
   const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
     const it = items[i]!;
     dummy.position.set(it.x, it.y, it.z);
@@ -296,10 +316,10 @@ export class InstancePool {
     return i;
   }
 
-  move(i: number, x: number, y: number, z: number) {
+  move(i: number, x: number, y: number, z: number, dx = 0, dy = 1, dz = 0, scale = 1) {
     this.dummy.position.set(x, y, z);
-    this.dummy.rotation.set(0, 0, 0);
-    this.dummy.scale.setScalar(1);
+    this.dummy.quaternion.setFromUnitVectors(_upAxis, _instDir.set(dx, dy, dz).normalize());
+    this.dummy.scale.setScalar(scale);
     this.dummy.updateMatrix();
     this.mesh.setMatrixAt(i, this.dummy.matrix);
   }

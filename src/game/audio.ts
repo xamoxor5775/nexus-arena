@@ -10,6 +10,11 @@ export class ArenaAudio {
   private drone: OscillatorNode | null = null;
   private drone2: OscillatorNode | null = null;
   private droneNoise: AudioBufferSourceNode | null = null;
+  private cryptGain: GainNode | null = null;
+  private cryptAir: AudioBufferSourceNode | null = null;
+  private cryptHum: OscillatorNode | null = null;
+  private cryptLevel = 0;
+  private dripIn = 1.4;
   private verb: DelayNode | null = null;
   private verbGain: GainNode | null = null;
   private buffers = new Map<NoiseKind, AudioBuffer>();
@@ -165,32 +170,34 @@ export class ArenaAudio {
 
   fire(weapon: string) {
     this.unlock();
-    const r = 0.94 + Math.random() * 0.12;
+    const r = 0.97 + Math.random() * 0.06;
     if (weapon === "pulse") {
-      this.layer("white", 0.045, 0.22, "highpass", 1800, 0.6, 0.08);
-      this.layer("pink", 0.07, 0.16, "bandpass", 900 * r, 1.4, 0.12);
-      this.tone(92 * r, "sine", 0.07, 0.14, 48);
-      this.tone(210 * r, "triangle", 0.03, 0.06, 90);
+      this.tone(220 * r, "triangle", 0.055, 0.052, 128);
+      this.layer("pink", 0.045, 0.046, "bandpass", 980, 1.2, 0.045);
+      this.layer("white", 0.018, 0.018, "highpass", 3600, 0.55, 0.018);
     } else if (weapon === "scatter") {
-      this.layer("white", 0.12, 0.34, "lowpass", 2400, 0.5, 0.16);
-      this.layer("pink", 0.18, 0.22, "bandpass", 420, 0.8, 0.2);
-      this.tone(78 * r, "sine", 0.16, 0.18, 36);
-      this.tone(160 * r, "sawtooth", 0.08, 0.05, 55);
+      this.tone(96 * r, "triangle", 0.09, 0.07, 58);
+      this.layer("pink", 0.075, 0.065, "lowpass", 720, 0.6, 0.07);
+      this.layer("white", 0.028, 0.025, "bandpass", 2100, 1.1, 0.03);
     } else if (weapon === "torpedo") {
-      this.layer("brown", 0.16, 0.18, "lowpass", 380, 0.6, 0.14);
-      this.layer("pink", 0.22, 0.14, "bandpass", 280 * r, 1.1, 0.22);
-      this.tone(64 * r, "sine", 0.22, 0.16, 32);
-      this.tone(240 * r, "sawtooth", 0.12, 0.05, 70);
+      this.tone(78 * r, "sine", 0.11, 0.065, 42);
+      this.layer("brown", 0.1, 0.055, "lowpass", 240, 0.5, 0.055);
+      this.layer("white", 0.018, 0.018, "bandpass", 1450, 0.9, 0.025);
     } else if (weapon === "lance") {
-      this.layer("white", 0.08, 0.12, "highpass", 3200, 0.7, 0.1);
-      this.tone(1480 * r, "sine", 0.16, 0.11, 280);
-      this.tone(740 * r, "triangle", 0.2, 0.07, 160);
-      this.layer("pink", 0.14, 0.08, "bandpass", 2100, 2.2, 0.18);
+      this.tone(880 * r, "sine", 0.07, 0.052, 470);
+      this.layer("white", 0.04, 0.04, "bandpass", 1800, 1.6, 0.035);
     } else if (weapon === "ion") {
-      this.layer("white", 0.05, 0.1, "bandpass", 2600 * r, 3.5, 0.14);
-      this.tone(540 * r, "sine", 0.09, 0.09, 180);
-      this.tone(1080 * r, "triangle", 0.06, 0.04, 400);
+      this.tone(640 * r, "triangle", 0.06, 0.046, 390);
+      this.layer("white", 0.035, 0.035, "bandpass", 2200, 2, 0.035);
     }
+  }
+
+  /** Paso corto y filtrado: se llama por cadencia, nunca por cada frame. */
+  step(speed: number, hard = false) {
+    this.unlock();
+    const run = Math.max(0, Math.min(1, (speed - 2) / 9));
+    this.layer("brown", hard ? 0.085 : 0.052, 0.025 + run * 0.035, "lowpass", hard ? 230 : 340, 0.5, 0.018);
+    this.tone(74 + run * 22, "sine", hard ? 0.07 : 0.045, 0.012 + run * 0.018, 48 + run * 9);
   }
 
   explode() {
@@ -206,8 +213,9 @@ export class ArenaAudio {
 
   hit() {
     this.unlock();
-    this.layer("white", 0.04, 0.1, "highpass", 2200, 0.8, 0.06);
-    this.tone(980 + Math.random() * 120, "triangle", 0.04, 0.06);
+    this.layer("white", 0.045, 0.105, "highpass", 2200, 0.8, 0.065);
+    this.layer("pink", 0.07, 0.035, "bandpass", 760, 1.4, 0.045);
+    this.tone(980 + Math.random() * 120, "triangle", 0.045, 0.065, 640);
   }
 
   hurt() {
@@ -249,14 +257,18 @@ export class ArenaAudio {
 
   frag() {
     this.unlock();
-    this.tone(392, "triangle", 0.1, 0.07);
-    this.tone(587, "sine", 0.16, 0.06);
+    this.tone(523, "sine", 0.08, 0.04, 784);
   }
 
   death() {
     this.unlock();
-    this.layer("brown", 0.4, 0.2, "lowpass", 160, 0.5, 0.18);
-    this.tone(180, "sawtooth", 0.42, 0.12, 42);
+    this.tone(196, "sine", 0.18, 0.05, 88);
+    this.layer("pink", 0.08, 0.03, "lowpass", 280, 0.5, 0.03);
+  }
+
+  down() {
+    this.unlock();
+    this.tone(240, "sine", 0.05, 0.018, 150);
   }
 
   empty() {
@@ -317,11 +329,105 @@ export class ArenaAudio {
       this.drone?.stop();
       this.drone2?.stop();
       this.droneNoise?.stop();
+      this.cryptAir?.stop();
+      this.cryptHum?.stop();
     } catch {
       /* already stopped */
     }
     this.drone = null;
     this.drone2 = null;
     this.droneNoise = null;
+    this.cryptAir = null;
+    this.cryptHum = null;
+    this.cryptGain = null;
+    this.cryptLevel = 0;
+  }
+
+  /** depth 0 en la superficie, 1 dentro de las catacumbas. */
+  setCrypt(depth: number, dt: number) {
+    this.unlock();
+    if (!this.ctx || !this.sfx) return;
+    this.ensureCrypt();
+    const target = Math.max(0, Math.min(1, depth));
+    this.cryptLevel += (target - this.cryptLevel) * (1 - Math.exp(-2.4 * dt));
+    if (this.cryptGain) {
+      this.cryptGain.gain.setTargetAtTime(this.cryptLevel, this.ctx.currentTime, 0.08);
+    }
+    if (this.cryptLevel < 0.08) return;
+    this.dripIn -= dt;
+    if (this.dripIn > 0) return;
+    this.dripIn = 0.55 + Math.random() * 2.4;
+    this.drip();
+  }
+
+  private ensureCrypt() {
+    if (!this.ctx || !this.sfx || this.cryptGain) return;
+    const bus = this.ctx.createGain();
+    bus.gain.value = 0;
+    const wet = this.ctx.createBiquadFilter();
+    wet.type = "lowpass";
+    wet.frequency.value = 900;
+    bus.connect(wet);
+    wet.connect(this.sfx);
+    this.sendVerb(wet, 0.55);
+
+    const air = this.noise("brown", 6);
+    if (air) {
+      const f = this.ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 240;
+      f.Q.value = 0.45;
+      const g = this.ctx.createGain();
+      g.gain.value = 0.22;
+      air.connect(f);
+      f.connect(g);
+      g.connect(bus);
+      air.loop = true;
+      air.start();
+      this.cryptAir = air;
+    }
+
+    const hum = this.ctx.createOscillator();
+    hum.type = "sine";
+    hum.frequency.value = 48;
+    const hg = this.ctx.createGain();
+    hg.gain.value = 0.08;
+    hum.connect(hg);
+    hg.connect(bus);
+    hum.start();
+    this.cryptHum = hum;
+    this.cryptGain = bus;
+  }
+
+  private drip() {
+    if (!this.ctx || !this.cryptGain) return;
+    const ping = 680 + Math.random() * 900;
+    const src = this.noise("white", 0.08);
+    const osc = this.ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(ping, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(ping * 0.72, this.ctx.currentTime + 0.09);
+    const g = this.ctx.createGain();
+    const t = this.ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16 + Math.random() * 0.08, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    osc.connect(g);
+    g.connect(this.cryptGain);
+    osc.start(t);
+    osc.stop(t + 0.18);
+    if (src) {
+      const hf = this.ctx.createBiquadFilter();
+      hf.type = "highpass";
+      hf.frequency.value = 1400;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.05, t);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+      src.connect(hf);
+      hf.connect(ng);
+      ng.connect(this.cryptGain);
+      src.start(t);
+      src.stop(t + 0.06);
+    }
   }
 }

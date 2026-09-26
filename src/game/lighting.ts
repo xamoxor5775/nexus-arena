@@ -21,6 +21,37 @@ function makeSunGlowTex() {
   return tex;
 }
 
+function makeGlintTex() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return new THREE.Texture();
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+  g.addColorStop(0, "rgba(255,252,236,1)");
+  g.addColorStop(0.16, "rgba(255,214,120,0.85)");
+  g.addColorStop(0.42, "rgba(255,120,40,0.22)");
+  g.addColorStop(1, "rgba(255,60,10,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  ctx.strokeStyle = "rgba(255,248,230,0.9)";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(32, 4);
+  ctx.lineTo(32, 60);
+  ctx.moveTo(4, 32);
+  ctx.lineTo(60, 32);
+  ctx.moveTo(12, 12);
+  ctx.lineTo(52, 52);
+  ctx.moveTo(52, 12);
+  ctx.lineTo(12, 52);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 function makeSunSprite(map: THREE.Texture, color: number, size: number) {
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({
@@ -50,7 +81,9 @@ export type ArenaLights = {
   tick: (now: number, dt: number, reduced: boolean, camera: THREE.Camera) => number;
   flash: (x: number, y: number, z: number, color: number, peak?: number) => void;
   setMuzzle: (color: number, peak?: number) => void;
-  addPad: (parent: THREE.Object3D, x: number, z: number) => void;
+  addPad: (parent: THREE.Object3D, x: number, z: number, y?: number) => void;
+  addFill: (parent: THREE.Object3D, x: number, y: number, z: number, color: number, intensity: number, distance: number) => void;
+  addGlint: (parent: THREE.Object3D, x: number, y: number, z: number) => void;
   dispose: () => void;
 };
 
@@ -67,18 +100,25 @@ export function createArenaLights(
     ember: PulseMat;
   },
   renderer?: THREE.WebGLRenderer,
+  theme: "crucible" | "summit" | "lave" = "crucible",
 ): ArenaLights {
   const lowPower =
     typeof window !== "undefined" &&
     (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 720);
 
-  const hemi = new THREE.HemisphereLight(0xffb080, 0x2a1812, 0.78);
+  const space = theme === "summit";
+  const lave = theme === "lave";
+  const hemi = new THREE.HemisphereLight(
+    space ? 0xb7d4ff : lave ? 0xffcfaa : 0xffb080,
+    space ? 0x1c2836 : lave ? 0x3a1b10 : 0x2a1812,
+    0.78,
+  );
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xffc070, 1.35);
+  const sun = new THREE.DirectionalLight(space ? 0xd4e4ff : lave ? 0xff8a40 : 0xffc070, space ? 1.18 : lave ? 1.42 : 1.35);
   sun.position.set(48, 78, 62);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(lowPower ? 512 : 1024, lowPower ? 512 : 1024);
+  sun.castShadow = !lowPower;
+  sun.shadow.mapSize.set(512, 512);
   sun.shadow.camera.near = 8;
   sun.shadow.camera.far = 240;
   sun.shadow.camera.left = -72;
@@ -94,17 +134,17 @@ export function createArenaLights(
   scene.add(sun.target);
   sun.target.position.set(0, 2, 0);
 
-  const bounce = new THREE.DirectionalLight(0x6a2030, 0.28);
+  const bounce = new THREE.DirectionalLight(space ? 0x24405c : lave ? 0x873818 : 0x6a2030, 0.28);
   bounce.position.set(-32, 24, -26);
   bounce.castShadow = false;
   scene.add(bounce);
 
-  const rim = new THREE.DirectionalLight(0xffc090, 0.28);
+  const rim = new THREE.DirectionalLight(space ? 0x9ec8ff : lave ? 0xffb06c : 0xffc090, 0.28);
   rim.position.set(12, 18, -40);
   rim.castShadow = false;
   scene.add(rim);
 
-  const ambient = new THREE.AmbientLight(0x5a4034, 0.22);
+  const ambient = new THREE.AmbientLight(space ? 0x2c3c50 : lave ? 0x5a3020 : 0x5a4034, 0.22);
   scene.add(ambient);
 
   const muzzle = new THREE.PointLight(0xffe0a0, 0, 14, 1.8);
@@ -126,6 +166,9 @@ export function createArenaLights(
 
   const pads: THREE.PointLight[] = [];
   const padPhase: number[] = [];
+  const fills: Array<{ lamp: THREE.PointLight; base: number; phase: number }> = [];
+  const glints: Array<{ sprite: THREE.Sprite; phase: number; base: number }> = [];
+  const glintMap = makeGlintTex();
 
   const sunGlowMap = makeSunGlowTex();
   const sunCore = new THREE.Mesh(
@@ -143,21 +186,25 @@ export function createArenaLights(
   sunCore.renderOrder = -4;
   scene.add(sunCore);
 
-  const corona = makeSunSprite(sunGlowMap, 0xffe8a8, 52);
-  const halo = makeSunSprite(sunGlowMap, 0xff6a28, 96);
-  const sting = makeSunSprite(sunGlowMap, 0xfff8ee, 18);
+  const corona = makeSunSprite(sunGlowMap, space ? 0xdceaff : 0xffe8a8, space ? 34 : 52);
+  const halo = makeSunSprite(sunGlowMap, space ? 0x3f78d8 : 0xff6a28, space ? 58 : 96);
+  const sting = makeSunSprite(sunGlowMap, 0xfff8ee, space ? 12 : 18);
   corona.position.copy(sunCore.position);
   halo.position.copy(sunCore.position);
   sting.position.copy(sunCore.position);
   scene.add(corona, halo, sting);
 
-  const sunLamp = new THREE.PointLight(0xffc070, 10, 180, 1.55);
+  const sunLamp = new THREE.PointLight(space ? 0xc6dcff : 0xffc070, 10, 180, 1.55);
   sunLamp.castShadow = false;
   sunLamp.position.copy(sunCore.position);
   scene.add(sunLamp);
 
-  scene.fog = new THREE.Fog(0x2a100c, 55, 165);
-  scene.background = new THREE.Color(0x1a0a08);
+  scene.fog = new THREE.Fog(
+    space ? 0x070b12 : lave ? 0x4a2115 : 0x2a100c,
+    space || lave ? 80 : 55,
+    space ? 240 : lave ? 220 : 165,
+  );
+  scene.background = new THREE.Color(space ? 0x05070c : lave ? 0x2b0e08 : 0x1a0a08);
 
   let muzzleT = 0;
   let muzzlePeak = 0;
@@ -165,14 +212,48 @@ export function createArenaLights(
   const fogColor = scene.fog.color;
   const bg = scene.background as THREE.Color;
 
-  function addPad(parent: THREE.Object3D, x: number, z: number) {
-    if (pads.length >= 2) return;
-    const glow = new THREE.PointLight(0x7ff5e4, 2.2, 9, 1.8);
+  function addPad(parent: THREE.Object3D, x: number, z: number, y = 0.55) {
+    if (pads.length >= (space && !lowPower ? 4 : 2)) return;
+    const glow = new THREE.PointLight(lave ? 0xff6a28 : 0x7ff5e4, 2.2, 9, 1.8);
     glow.castShadow = false;
-    glow.position.set(x, 0.55, z);
+    glow.position.set(x, y, z);
     parent.add(glow);
     pads.push(glow);
     padPhase.push(pads.length * 1.37);
+  }
+
+  function addFill(
+    parent: THREE.Object3D,
+    x: number,
+    y: number,
+    z: number,
+    color: number,
+    intensity: number,
+    distance: number,
+  ) {
+    const lamp = new THREE.PointLight(color, intensity, distance, 1.55);
+    lamp.castShadow = false;
+    lamp.position.set(x, y, z);
+    parent.add(lamp);
+    fills.push({ lamp, base: intensity, phase: fills.length * 0.85 });
+  }
+
+  function addGlint(parent: THREE.Object3D, x: number, y: number, z: number) {
+    if (glints.length >= 36) return;
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glintMap,
+        color: 0xffe6b0,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        fog: true,
+      }),
+    );
+    sprite.position.set(x, y, z);
+    sprite.scale.setScalar(0.32);
+    parent.add(sprite);
+    glints.push({ sprite, phase: glints.length * 1.63, base: 0.26 + (glints.length % 3) * 0.08 });
   }
 
   function flash(x: number, y: number, z: number, color: number, peak = 16) {
@@ -211,31 +292,44 @@ export function createArenaLights(
     halo.position.copy(sun.position);
     sting.position.copy(sun.position);
     sunLamp.position.copy(sun.position);
-    const s = 1 + 0.04 * pulse;
-    sunCore.scale.setScalar(s);
-    corona.scale.setScalar(48 + 10 * pulse);
-    halo.scale.setScalar(88 + 18 * pulse);
-    sting.scale.setScalar(14 + 4 * pulse);
+    sunCore.scale.setScalar(1 + 0.04 * pulse);
+    corona.scale.setScalar((space ? 32 : 48) + (space ? 6 : 10) * pulse);
+    halo.scale.setScalar((space ? 54 : 88) + (space ? 10 : 18) * pulse);
+    sting.scale.setScalar((space ? 10 : 14) + (space ? 3 : 4) * pulse);
 
-    _c.setHex(0xff7a32);
-    _c2.setHex(0xfff1c0);
-    sun.color.copy(_c).lerp(_c2, 0.55 + 0.35 * breathe);
-    sun.intensity = 1.28 + 0.18 * pulse;
-    sunLamp.intensity = 8 + 4 * pulse;
+    sunLamp.intensity = space ? 5 + 2 * pulse : 8 + 4 * pulse;
     bounce.intensity = 0.22 + 0.08 * (1 - pulse);
     bounce.position.set(-sun.position.x * 0.35, 22, -sun.position.z * 0.35);
-    (sunCore.material as THREE.MeshBasicMaterial).color.setHex(0xfff8e4);
-    (corona.material as THREE.SpriteMaterial).opacity = 0.92 + 0.08 * pulse;
-    (halo.material as THREE.SpriteMaterial).opacity = 0.55 + 0.2 * pulse;
+    (corona.material as THREE.SpriteMaterial).opacity = space ? 0.7 + 0.08 * pulse : 0.92 + 0.08 * pulse;
+    (halo.material as THREE.SpriteMaterial).opacity = space ? 0.32 + 0.12 * pulse : 0.55 + 0.2 * pulse;
     (sting.material as THREE.SpriteMaterial).opacity = 0.85 + 0.15 * pulse;
 
-    hemi.color.copy(sun.color);
-    hemi.intensity = 0.72 + 0.1 * pulse;
     ambient.intensity = 0.2 + 0.05 * breathe;
     rim.intensity = 0.16 + 0.06 * breathe;
-
-    fogColor.setHex(0x24100c).lerp(_c2.setHex(0x3a1810), 0.18 + 0.16 * breathe);
-    bg.copy(fogColor).multiplyScalar(0.62);
+    if (space) {
+      sun.color.setHex(0xfff4dd);
+      sun.intensity = 1.5 + 0.08 * pulse;
+      hemi.intensity = 0.9;
+    } else if (lave) {
+      _c.setHex(0xff8a42);
+      _c2.setHex(0xffe1b8);
+      sun.color.copy(_c).lerp(_c2, 0.62 + 0.22 * breathe);
+      sun.intensity = 1.36 + 0.14 * pulse;
+      fogColor.setHex(0x431b12).lerp(_c2.setHex(0x672915), 0.12 + 0.1 * breathe);
+      bg.copy(fogColor).multiplyScalar(0.58);
+      hemi.color.setHex(0xffcfaa);
+      hemi.groundColor.setHex(0x3a1b10);
+      hemi.intensity = 0.82;
+    } else {
+      _c.setHex(0xff7a32);
+      _c2.setHex(0xfff1c0);
+      sun.color.copy(_c).lerp(_c2, 0.55 + 0.35 * breathe);
+      sun.intensity = 1.28 + 0.18 * pulse;
+      fogColor.setHex(0x24100c).lerp(_c2.setHex(0x3a1810), 0.18 + 0.16 * breathe);
+      bg.copy(fogColor).multiplyScalar(0.62);
+      hemi.color.copy(sun.color);
+      hemi.intensity = 0.72 + 0.1 * pulse;
+    }
 
     mats.floor.emissiveIntensity = 0.18 + 0.08 * pulse;
     mats.console.emissiveIntensity = 0.2 + 0.1 * pulse;
@@ -249,6 +343,18 @@ export function createArenaLights(
     for (let i = 0; i < pads.length; i++) {
       const p = 0.5 + 0.5 * Math.sin(now * 3.6 + padPhase[i]!);
       pads[i]!.intensity = 1.4 + 1.8 * p * (0.65 + 0.35 * slow);
+    }
+
+    for (const fill of fills) {
+      const breatheFill = 0.84 + 0.16 * Math.sin(now * 1.25 + fill.phase);
+      fill.lamp.intensity = fill.base * breatheFill;
+    }
+
+    for (const glint of glints) {
+      const tw = Math.pow(Math.max(0, 0.5 + 0.5 * Math.sin(now * 3.6 + glint.phase)), 5);
+      const mat = glint.sprite.material as THREE.SpriteMaterial;
+      mat.opacity = 0.08 + 0.92 * tw;
+      glint.sprite.scale.setScalar(glint.base * (0.65 + tw));
     }
 
     muzzleT = Math.max(0, muzzleT - dt);
@@ -274,7 +380,7 @@ export function createArenaLights(
     }
 
     shadowWait += dt;
-    if (shadowWait >= (lowPower ? 0.7 : 0.4)) {
+    if (shadowWait >= 1.6) {
       shadowWait = 0;
       sun.shadow.needsUpdate = true;
       if (renderer) renderer.shadowMap.needsUpdate = true;
@@ -291,10 +397,12 @@ export function createArenaLights(
     (halo.material as THREE.Material).dispose();
     (sting.material as THREE.Material).dispose();
     sunGlowMap.dispose();
+    glintMap.dispose();
+    for (const glint of glints) (glint.sprite.material as THREE.Material).dispose();
     for (const L of flashes) scene.remove(L);
     for (const L of pads) L.removeFromParent();
   }
 
   if (renderer) renderer.shadowMap.needsUpdate = true;
-  return { tick, flash, setMuzzle, addPad, dispose };
+  return { tick, flash, setMuzzle, addPad, addFill, addGlint, dispose };
 }

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { WEAPON_ORDER } from "./constants";
 import type { WeaponId } from "./types";
 import { buildViewmodel } from "./viewmodel";
@@ -25,7 +26,7 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
     powerPreference: "high-performance",
     alpha: false,
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1.25 : 1.75));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1 : 1.25));
   renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -33,7 +34,7 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
   renderer.autoClear = false;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.autoUpdate = false;
-  renderer.shadowMap.type = lowPower ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
   const gunScene = new THREE.Scene();
@@ -44,17 +45,23 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
   const gunRoot = new THREE.Group();
   gunRoot.scale.setScalar(1.68);
   gunScene.add(gunRoot);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  const studio = pmrem.fromScene(room, 0.04);
+  room.dispose();
+  gunScene.environment = studio.texture;
+  gunScene.environmentIntensity = 1.22;
   const hemi = new THREE.HemisphereLight(0xfff4ea, 0x3a2a22, 1.35);
-  const key = new THREE.DirectionalLight(0xfff6ea, 4.4);
+  const key = new THREE.DirectionalLight(0xfff6ea, 4.7);
   key.position.set(0.55, 1.35, 0.95);
-  const grim = new THREE.DirectionalLight(0x9af5e8, 0.85);
-  grim.position.set(-1.1, 0.25, -0.55);
-  const fill = new THREE.DirectionalLight(0xffb07a, 1.15);
+  const grim = new THREE.DirectionalLight(0xc8fff4, 2.7);
+  grim.position.set(-1.6, 0.45, 0.15);
+  const fill = new THREE.DirectionalLight(0xffb07a, 1.2);
   fill.position.set(0.15, -0.55, 0.7);
-  const top = new THREE.DirectionalLight(0xfff8ee, 1.05);
+  const top = new THREE.DirectionalLight(0xfff8ee, 1.2);
   top.position.set(0.1, 1.7, 0.35);
-  const rim = new THREE.PointLight(0xffe4c4, 3.2, 5, 1.2);
-  rim.position.set(0.12, 0.18, 0.42);
+  const rim = new THREE.PointLight(0xffe4c4, 4.8, 4.5, 1.4);
+  rim.position.set(1.35, 0.28, 0.2);
   for (const light of [hemi, key, grim, fill, top, rim]) {
     light.layers.enableAll();
     gunScene.add(light);
@@ -98,6 +105,8 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number): Are
   };
 
   const dispose = () => {
+    studio.dispose();
+    pmrem.dispose();
     renderer.dispose();
   };
 

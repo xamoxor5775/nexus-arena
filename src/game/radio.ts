@@ -1,3 +1,5 @@
+import { debugSpool } from "@/lib/debug-spool";
+
 export type RadioTrack = { title: string; src: string };
 
 const STORAGE_KEY = "nexus-arena-radio-v1";
@@ -92,6 +94,7 @@ class ArenaRadio {
     });
     el.addEventListener("error", () => {
       this.fails += 1;
+      debugSpool.warn("radio", "no se pudo cargar el tema", { src: this.tracks[this.index]?.src, fails: this.fails });
       if (this.fails >= this.tracks.length) {
         this.playing = false;
         this.emit();

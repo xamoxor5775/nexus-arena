@@ -22,6 +22,12 @@ export type JumpPad = {
   vz: number;
 };
 
+export type TeleportGate = {
+  aabb: AABB;
+  target: { x: number; y: number; z: number; yaw?: number };
+  chute?: boolean;
+};
+
 export type ItemKind = "health" | "mega" | "armor" | "ammo" | WeaponId | PowerId;
 
 export type ItemPad = {
@@ -49,6 +55,9 @@ export type ScoreRow = {
   isPlayer: boolean;
 };
 
+export type ArenaId = "pozo" | "cumbre" | "lave";
+export type MatchMode = "ffa" | "duel";
+
 export type Settings = {
   name: string;
   sens: number;
@@ -57,6 +66,8 @@ export type Settings = {
   shake: number;
   bots: number;
   fragLimit: number;
+  arena: ArenaId;
+  mode: MatchMode;
 };
 
 export type HudSnapshot = {
