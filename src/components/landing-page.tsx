@@ -21,8 +21,8 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    // No autoplay: the 4 MB theme is fetched only when the user taps the audio button.
     audio.volume = 0.28;
-    audio.play().then(() => setAudioEnabled(true)).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -182,7 +182,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
   return (
     <main className="landing-shell">
       <div className="landing-grid" />
-      <audio ref={audioRef} src="/media/acceso-al-crucible.mp3" loop preload="auto" aria-label="Tema de fondo Acceso al Crucible" />
+      <audio ref={audioRef} src="/media/acceso-al-crucible.mp3" loop preload="none" aria-label="Tema de fondo Acceso al Crucible" />
       <header className="landing-nav">
         <div className="landing-brand">
           <span className="landing-brand-mark"><b>N</b><i /></span>
@@ -252,10 +252,6 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
             </div>
           )}
           <p className="landing-demo-note">Dentro de la arena puedes cambiar temas con N y M · usa los MP3 de /media.</p>
-        </div>
-        <div className="landing-art landing-video-art" aria-label="Vista previa en video de Nexus Arena">
-          <video className="landing-video" src="/media/nexus-arena-demo.mp4" poster="/media/nexus-arena-demo-poster.jpg" autoPlay muted loop playsInline />
-          <span className="video-scanline" />
         </div>
       </section>
       <section className="landing-features">
