@@ -40,8 +40,8 @@ export function bootGoogleAds(): Promise<AdsConfig | null> {
         amount: Number(body.amount) > 0 ? Number(body.amount) : 1000,
       };
       window.dataLayer = window.dataLayer || [];
-      window.gtag = function gtag(..._args: unknown[]) {
-        window.dataLayer?.push(arguments);
+      window.gtag = function gtag(...args: unknown[]) {
+        window.dataLayer?.push(args);
       };
       window.gtag("js", new Date());
       window.gtag("config", config.id);

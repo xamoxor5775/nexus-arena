@@ -29,6 +29,9 @@ export interface SignalRow {
 export interface RtcPollResponse {
   peers: PeerRow[];
   signals: SignalRow[];
+  arena?: string;
+  mode?: string;
+  hostId?: string;
 }
 
 export interface PeerInfo {
@@ -52,6 +55,8 @@ export interface P2PRoomOptions {
   onMessage?: (from: string, data: unknown, channel: "state" | "reliable") => void;
   /** Fires once, on the first successful signaling poll (registration). */
   onConnected?: () => void;
+  getSession?: () => { arena: string; mode: string };
+  onRoom?: (info: { arena: string; mode: string; hostId: string; host: boolean }) => void;
 }
 
 interface PeerSlot {
@@ -74,8 +79,9 @@ interface PeerSlot {
   pingSentAt?: number;
 }
 
-const FAST_POLL_MS = 400;
-const IDLE_POLL_MS = 2000;
+const FAST_POLL_MS = 700;
+const IDLE_POLL_MS = 5000;
+const HIDDEN_POLL_MS = 12000;
 const PING_INTERVAL_MS = 2000;
 const STALL_MS = 10_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
@@ -97,6 +103,7 @@ export function defaultIceServers(): RTCIceServer[] {
 
 export class P2PRoom {
   private readonly opts: P2PRoomOptions;
+  private displayName: string;
   private readonly peers = new Map<string, PeerSlot>();
   /** Per-remote-peer signal delivery chains (order-preserving). */
   private readonly signalQueues = new Map<string, Promise<void>>();
@@ -106,9 +113,17 @@ export class P2PRoom {
   private closed = false;
   private everPolled = false;
   private lastPeersFingerprint = "";
+  private failStreak = 0;
+  private hidden = false;
+  private onVisibility?: () => void;
 
   constructor(opts: P2PRoomOptions) {
     this.opts = opts;
+    this.displayName = opts.name ?? "";
+  }
+
+  setDisplayName(name: string) {
+    this.displayName = name.slice(0, 14);
   }
 
   /**
@@ -123,7 +138,15 @@ export class P2PRoom {
       // First poll can fail transiently; the scheduled loop below retries.
     }
     if (this.closed) return;
-    this.schedulePoll(this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS);
+    this.hidden = typeof document !== "undefined" && document.hidden;
+    if (typeof document !== "undefined") {
+      this.onVisibility = () => {
+        this.hidden = document.hidden;
+        if (!this.hidden) this.schedulePoll(80);
+      };
+      document.addEventListener("visibilitychange", this.onVisibility);
+    }
+    this.schedulePoll(this.pollDelay());
     this.pingTimer = setInterval(() => {
       this.pingAll();
       this.watchdog();
@@ -134,6 +157,9 @@ export class P2PRoom {
     this.closed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.onVisibility && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+    }
     for (const slot of this.peers.values()) slot.pc.close();
     this.peers.clear();
     // Leaving the roster is the teardown broadcast: everyone's next poll
@@ -169,6 +195,12 @@ export class P2PRoom {
 
   // ── signaling loop ─────────────────────────────────────────────────────────
 
+  private pollDelay(): number {
+    if (this.hidden) return HIDDEN_POLL_MS;
+    if (this.failStreak) return Math.min(12_000, 900 * 2 ** this.failStreak);
+    return this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS;
+  }
+
   private schedulePoll(delay: number): void {
     if (this.closed) return;
     if (this.pollTimer) clearTimeout(this.pollTimer);
@@ -189,12 +221,13 @@ export class P2PRoom {
     const params = new URLSearchParams({
       room: this.opts.room,
       peer: this.opts.selfId,
-      name: this.opts.name ?? "",
+      name: this.displayName,
       since: String(this.cursor),
     });
     const res = await fetch(`/api/rtc?${params}`);
     if (this.closed) return;
     if (!res.ok) throw new Error(`signaling poll failed: ${res.status}`);
+    this.failStreak = 0;
     const body = (await res.json()) as RtcPollResponse;
     if (this.closed) return;
     if (!this.everPolled) {
@@ -202,6 +235,14 @@ export class P2PRoom {
       this.opts.onConnected?.();
     }
     this.reconcileRoster(body.peers);
+    if (body.arena && body.mode && body.hostId) {
+      this.opts.onRoom?.({
+        arena: body.arena,
+        mode: body.mode,
+        hostId: body.hostId,
+        host: body.hostId === this.opts.selfId,
+      });
+    }
     const roster = new Set(body.peers.map((p) => p.id));
     for (const sig of body.signals) {
       this.cursor = Math.max(this.cursor, sig.id);
@@ -215,9 +256,9 @@ export class P2PRoom {
     try {
       await this.pollOnce();
     } catch {
-      // Transient poll failures are expected (tab sleep, deploy roll); retry.
+      this.failStreak = Math.min(6, this.failStreak + 1);
     }
-    this.schedulePoll(this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS);
+    this.schedulePoll(this.pollDelay());
   }
 
   private reconcileRoster(peers: { id: string; name: string }[]): void {

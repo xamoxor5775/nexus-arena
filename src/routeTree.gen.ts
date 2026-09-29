@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as GraciasRouteImport } from './routes/gracias'
 import { Route as AdminMetricsRouteImport } from './routes/admin/metrics'
 
 const IndexRoute = IndexRouteImport.update({
@@ -17,7 +18,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-
+const GraciasRoute = GraciasRouteImport.update({
+  id: '/gracias',
+  path: '/gracias',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminMetricsRoute = AdminMetricsRouteImport.update({
   id: '/admin/metrics',
   path: '/admin/metrics',
@@ -26,27 +31,31 @@ const AdminMetricsRoute = AdminMetricsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/gracias': typeof GraciasRoute
   '/admin/metrics': typeof AdminMetricsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/gracias': typeof GraciasRoute
   '/admin/metrics': typeof AdminMetricsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/gracias': typeof GraciasRoute
   '/admin/metrics': typeof AdminMetricsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin/metrics'
+  fullPaths: '/' | '/gracias' | '/admin/metrics'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin/metrics'
-  id: '__root__' | '/' | '/admin/metrics'
+  to: '/' | '/gracias' | '/admin/metrics'
+  id: '__root__' | '/' | '/gracias' | '/admin/metrics'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  GraciasRoute: typeof GraciasRoute
   AdminMetricsRoute: typeof AdminMetricsRoute
 }
 
@@ -57,6 +66,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gracias': {
+      id: '/gracias'
+      path: '/gracias'
+      fullPath: '/gracias'
+      preLoaderRoute: typeof GraciasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/metrics': {
@@ -71,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  GraciasRoute: GraciasRoute,
   AdminMetricsRoute: AdminMetricsRoute,
 }
 export const routeTree = rootRouteImport

@@ -215,7 +215,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
       <section className="landing-hero">
         <div className="landing-copy">
           <p className="landing-kicker">ACCESO AL CRUCIBLE · TEMPORADA 01</p>
-          <h1>Entra.<br /><em>Apunta.</em><br />Domina.</h1>
+          <h1>Retroceder nunca,<br /><em>rendirse jamás</em></h1>
           <p className="landing-lede">Deathmatch FPS en el navegador. Cinco armas, bots letales y una arena industrial. Compra, guarda tu llave y entra cuando quieras durante 30 días.</p>
           <div className="landing-actions">
             <button type="button" className="landing-buy" onClick={focusCheckout}>
@@ -231,7 +231,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
             >
               <input id="checkout-nombre" type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder="Nombre completo" aria-label="Nombre completo" autoComplete="name" required disabled={busy} />
               <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Tu correo" aria-label="Correo para comprar acceso" autoComplete="email" inputMode="email" required disabled={busy} />
-              <button type="submit" disabled={busy}>{busy ? "PROCESANDO..." : "COMPRAR CON FLOW"}</button>
+              <button type="submit" disabled={busy}>{busy ? "PROCESANDO…" : "COMPRAR CON FLOW"}</button>
             </form>
           </div>
           <p id="checkout-pendiente" className="landing-note">Pago único · Flow Chile · la llave se entrega solo si el pago está confirmado</p>
@@ -248,7 +248,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
               <strong>GUARDA ESTA LLAVE DE ACCESO</strong>
               <code>{accessToken}</code>
               <button type="button" onClick={() => void copyToken()}>{copied ? "COPIADA" : "COPIAR TOKEN"}</button>
-              <button type="button" onClick={() => void activateToken(accessToken)} disabled={busy}>{busy ? "VALIDANDO..." : "ENTRAR A LA ARENA"}</button>
+              <button type="button" onClick={() => void activateToken(accessToken)} disabled={busy}>{busy ? "VALIDANDO…" : "ENTRAR A LA ARENA"}</button>
             </div>
           )}
           <p className="landing-demo-note">Dentro de la arena puedes cambiar temas con N y M · usa los MP3 de /media.</p>

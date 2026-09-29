@@ -1,5 +1,59 @@
 type NoiseKind = "white" | "pink" | "brown";
 
+/** Samples arcade en /public/sfx (ogg Opus + mp3 de respaldo). Si no cargan, se usa el synth de abajo. */
+const SFX_IDS = [
+  "fire_pulse",
+  "fire_scatter",
+  "fire_torpedo",
+  "fire_lance",
+  "fire_ion",
+  "fire_fauces",
+  "swing_knife",
+  "swing_bate",
+  "swing_martillo",
+  "grenade_throw",
+  "explode",
+  "ion_impact",
+  "hit_marker",
+  "empty_click",
+  "reload_start",
+  "reload_done",
+  "kill_confirm",
+  "headshot",
+  "bot_down",
+  "player_death",
+  "victory",
+  "defeat",
+] as const;
+type SfxId = (typeof SFX_IDS)[number];
+
+/** Ganancia lineal por sample (los archivos vienen a -16 LUFS); calibrada contra el mix synth anterior. */
+const SFX_GAIN: Record<SfxId, number> = {
+  fire_pulse: 0.035,
+  fire_scatter: 0.036,
+  fire_torpedo: 0.042,
+  fire_lance: 0.033,
+  fire_ion: 0.019,
+  fire_fauces: 0.037,
+  swing_knife: 0.012,
+  swing_bate: 0.013,
+  swing_martillo: 0.016,
+  grenade_throw: 0.041,
+  explode: 0.651,
+  ion_impact: 0.023,
+  hit_marker: 0.055,
+  empty_click: 0.015,
+  reload_start: 0.017,
+  reload_done: 0.015,
+  kill_confirm: 0.021,
+  headshot: 0.035,
+  bot_down: 0.007,
+  player_death: 0.03,
+  victory: 0.259,
+  defeat: 0.216,
+};
+const SFX_MAX_VOICES = 4;
+
 export class ArenaAudio {
   ctx: AudioContext | null = null;
   master: GainNode | null = null;
@@ -18,6 +72,10 @@ export class ArenaAudio {
   private verb: DelayNode | null = null;
   private verbGain: GainNode | null = null;
   private buffers = new Map<NoiseKind, AudioBuffer>();
+  private samples = new Map<SfxId, AudioBuffer>();
+  private samplesRequested = false;
+  private preferMp3 = false;
+  private voices = new Map<SfxId, AudioBufferSourceNode[]>();
 
   unlock() {
     if (!this.ctx) {
@@ -58,6 +116,76 @@ export class ArenaAudio {
       this.applyVolume();
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.loadSamples();
+  }
+
+  private decode(data: ArrayBuffer): Promise<AudioBuffer> {
+    const ctx = this.ctx!;
+    return new Promise<AudioBuffer>((resolve, reject) => {
+      const p = ctx.decodeAudioData(data, resolve, reject) as Promise<AudioBuffer> | undefined;
+      if (p && typeof p.then === "function") p.then(resolve, reject);
+    });
+  }
+
+  private loadSamples() {
+    if (this.samplesRequested || !this.ctx || typeof fetch !== "function") return;
+    this.samplesRequested = true;
+    const loadOne = async (id: SfxId) => {
+      const exts = this.preferMp3 ? ["mp3"] : ["ogg", "mp3"];
+      for (const ext of exts) {
+        try {
+          const res = await fetch(`/sfx/${id}.${ext}`);
+          if (!res.ok) continue;
+          const buf = await this.decode(await res.arrayBuffer());
+          this.samples.set(id, buf);
+          return;
+        } catch {
+          if (ext === "ogg") this.preferMp3 = true;
+        }
+      }
+    };
+    void (async () => {
+      // el primero solo, para detectar si el navegador decodifica Ogg Opus; luego el resto en paralelo
+      await loadOne(SFX_IDS[0]);
+      await Promise.all(SFX_IDS.slice(1).map(loadOne));
+    })();
+  }
+
+  /** Reproduce un sample por el bus sfx. Devuelve false si aún no está cargado (el llamador usa el synth). */
+  private play(id: SfxId, gainMul = 1, rate = 1, verb = 0): boolean {
+    const buf = this.samples.get(id);
+    if (!buf || !this.ctx || !this.sfx) return false;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = this.ctx.createGain();
+    g.gain.value = SFX_GAIN[id] * gainMul;
+    src.connect(g);
+    g.connect(this.sfx);
+    if (verb > 0) this.sendVerb(g, verb);
+    let list = this.voices.get(id);
+    if (!list) {
+      list = [];
+      this.voices.set(id, list);
+    }
+    while (list.length >= SFX_MAX_VOICES) {
+      const old = list.shift();
+      try {
+        old?.stop();
+      } catch {
+        /* already stopped */
+      }
+    }
+    const voices = list;
+    voices.push(src);
+    src.onended = () => {
+      const i = voices.indexOf(src);
+      if (i >= 0) voices.splice(i, 1);
+      src.disconnect();
+      g.disconnect();
+    };
+    src.start();
+    return true;
   }
 
   setVolume(v: number) {
@@ -171,6 +299,10 @@ export class ArenaAudio {
   fire(weapon: string) {
     this.unlock();
     const r = 0.97 + Math.random() * 0.06;
+    const melee = weapon === "knife" || weapon === "bate" || weapon === "martillo";
+    if ((SFX_IDS as readonly string[]).includes(`${melee ? "swing" : "fire"}_${weapon}`)) {
+      if (this.play(`${melee ? "swing" : "fire"}_${weapon}` as SfxId, 1, r, 0.04)) return;
+    }
     if (weapon === "pulse") {
       this.tone(220 * r, "triangle", 0.055, 0.052, 128);
       this.layer("pink", 0.045, 0.046, "bandpass", 980, 1.2, 0.045);
@@ -186,9 +318,23 @@ export class ArenaAudio {
     } else if (weapon === "lance") {
       this.tone(880 * r, "sine", 0.07, 0.052, 470);
       this.layer("white", 0.04, 0.04, "bandpass", 1800, 1.6, 0.035);
+    } else if (weapon === "fauces") {
+      this.tone(64 * r, "triangle", 0.1, 0.08, 48);
+      this.layer("brown", 0.09, 0.06, "lowpass", 180, 0.5, 0.06);
+      this.layer("white", 0.03, 0.028, "bandpass", 1600, 1.1, 0.03);
+    } else if (weapon === "knife") {
+      this.tone(180 * r, "triangle", 0.04, 0.03, 90);
+      this.layer("white", 0.035, 0.02, "highpass", 2400, 0.6, 0.02);
+    } else if (weapon === "bate") {
+      this.tone(90 * r, "triangle", 0.07, 0.05, 70);
+      this.layer("brown", 0.06, 0.04, "lowpass", 320, 0.5, 0.04);
+    } else if (weapon === "martillo") {
+      this.tone(55 * r, "sine", 0.09, 0.06, 80);
+      this.layer("brown", 0.1, 0.05, "lowpass", 140, 0.45, 0.05);
     } else if (weapon === "ion") {
-      this.tone(640 * r, "triangle", 0.06, 0.046, 390);
-      this.layer("white", 0.035, 0.035, "bandpass", 2200, 2, 0.035);
+      this.tone(980 * r, "sine", 0.04, 0.034, 260);
+      this.tone(1560 * r, "square", 0.028, 0.01, 640);
+      this.layer("white", 0.018, 0.022, "highpass", 4600, 0.7, 0.016);
     }
   }
 
@@ -202,6 +348,7 @@ export class ArenaAudio {
 
   explode() {
     this.unlock();
+    if (this.play("explode", 1, 0.97 + Math.random() * 0.06, 0.12)) return;
     this.layer("white", 0.05, 0.28, "highpass", 2800, 0.4, 0.08);
     this.layer("pink", 0.18, 0.32, "bandpass", 620, 0.7, 0.2);
     this.layer("brown", 0.72, 0.5, "lowpass", 160, 0.45, 0.38);
@@ -211,8 +358,16 @@ export class ArenaAudio {
     this.tone(190, "sawtooth", 0.12, 0.05, 55);
   }
 
+  ionZap() {
+    this.unlock();
+    if (this.play("ion_impact", 1, 0.95 + Math.random() * 0.1)) return;
+    this.tone(1420, "sine", 0.04, 0.028, 380);
+    this.layer("white", 0.012, 0.018, "highpass", 5200, 0.55, 0.01);
+  }
+
   hit() {
     this.unlock();
+    if (this.play("hit_marker", 1, 0.98 + Math.random() * 0.06)) return;
     this.layer("white", 0.045, 0.105, "highpass", 2200, 0.8, 0.065);
     this.layer("pink", 0.07, 0.035, "bandpass", 760, 1.4, 0.045);
     this.tone(980 + Math.random() * 120, "triangle", 0.045, 0.065, 640);
@@ -257,24 +412,67 @@ export class ArenaAudio {
 
   frag() {
     this.unlock();
+    if (this.play("kill_confirm", 1, 1, 0.06)) return;
     this.tone(523, "sine", 0.08, 0.04, 784);
   }
 
   death() {
     this.unlock();
+    if (this.play("player_death", 1, 1, 0.1)) return;
     this.tone(196, "sine", 0.18, 0.05, 88);
     this.layer("pink", 0.08, 0.03, "lowpass", 280, 0.5, 0.03);
   }
 
   down() {
     this.unlock();
+    if (this.play("bot_down")) return;
     this.tone(240, "sine", 0.05, 0.018, 150);
   }
 
   empty() {
     this.unlock();
+    if (this.play("empty_click")) return;
     this.layer("white", 0.04, 0.05, "bandpass", 2800, 2, 0.04);
     this.tone(180, "square", 0.04, 0.035);
+  }
+
+  grenade() {
+    this.unlock();
+    if (this.play("grenade_throw", 1, 0.98 + Math.random() * 0.04)) return;
+    this.fire("torpedo");
+  }
+
+  headshot() {
+    this.unlock();
+    if (this.play("headshot", 1, 1, 0.08)) return;
+    this.frag();
+    this.tone(1046, "sine", 0.12, 0.035, 1568);
+  }
+
+  reload() {
+    this.unlock();
+    this.play("reload_start");
+  }
+
+  reloadDone() {
+    this.unlock();
+    this.play("reload_done");
+  }
+
+  /** place 1 = campeón; 2 = subcampeón (misma fanfarria, más suave y un poco más grave). */
+  victory(place: 1 | 2 = 1) {
+    this.unlock();
+    const second = place === 2;
+    if (this.play("victory", second ? 0.72 : 1, second ? 0.944 : 1, 0.08)) return;
+    const k = second ? 0.944 : 1;
+    this.tone(523 * k, "triangle", 0.14, 0.05);
+    this.tone(784 * k, "triangle", 0.3, 0.05, 1046 * k);
+  }
+
+  defeat() {
+    this.unlock();
+    if (this.play("defeat", 1, 1, 0.08)) return;
+    this.tone(330, "triangle", 0.5, 0.045, 196);
   }
 
   pad() {

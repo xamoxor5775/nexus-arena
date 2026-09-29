@@ -1,10 +1,10 @@
 import * as THREE from "three";
 import { boxAt } from "./collision";
-import type { ArenaData } from "./arena";
+import { stampJumpPads, type ArenaData } from "./arena";
 import { BoxBatch, instanceCylinders } from "./instancing";
 import { createArenaLights } from "./lighting";
-import { laveCrackTex, loadSkyTex, loadTex } from "./textures";
-import type { AABB, ItemPad, JumpPad, Spawn } from "./types";
+import { isLoDevice, laveCrackTex, loadSpaceSky, loadTex, skySphereGeo } from "./textures";
+import type { AABB, HazardZone, ItemPad, JumpPad, Spawn } from "./types";
 
 const WIDTH = 96;
 const DEPTH = 72;
@@ -12,6 +12,22 @@ const SLOPE = 0.07;
 
 function floorY(z: number) {
   return z * SLOPE;
+}
+
+function laveSmokeTex() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+  g.addColorStop(0, "rgba(255, 210, 160, 0.55)");
+  g.addColorStop(0.28, "rgba(90, 70, 60, 0.42)");
+  g.addColorStop(0.62, "rgba(28, 22, 20, 0.22)");
+  g.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
 }
 
 function addBox(
@@ -34,7 +50,7 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   const group = new THREE.Group();
   const solids: AABB[] = [];
   const pads: JumpPad[] = [];
-  const hazards: Array<{ x: number; y: number; z: number; radius: number; damage: number; color: number }> = [];
+  const hazards: HazardZone[] = [];
   const items: ItemPad[] = [];
   const spawns: Spawn[] = [];
   const waypoints: { x: number; y: number; z: number }[] = [];
@@ -42,17 +58,15 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   const geos: THREE.BufferGeometry[] = [];
   const batch = new BoxBatch();
 
-  const earthTex = loadTex("/textures/lave-earth.jpg", 22, 16);
-  const lavaTex = laveCrackTex(12, 9);
-  const earthMat = new THREE.MeshStandardMaterial({
-    map: earthTex,
-    color: 0xf0d2b0,
-    emissive: 0x3a1208,
-    emissiveMap: earthTex,
-    emissiveIntensity: 0.12,
-    roughness: 0.9,
-    metalness: 0.03,
+  const floorTex = loadTex("/textures/surfaces/lava-floor.webp", 1, 1);
+  const earthMat = new THREE.MeshLambertMaterial({
+    map: floorTex,
+    color: 0xffffff,
+    emissive: 0xff5a18,
+    emissiveMap: floorTex,
+    emissiveIntensity: 0.42,
   });
+  const lavaTex = laveCrackTex(4.2, 1.4);
   const rockTiers = new Map<number, THREE.MeshStandardMaterial>();
   const rockFor = (size: number) => {
     const tiles = Math.max(1, Math.round(size / 2.2));
@@ -60,9 +74,10 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
     if (!m) {
       m = new THREE.MeshStandardMaterial({
         map: loadTex("/textures/lave-rock.jpg", tiles, Math.max(1, Math.round(tiles * 0.7))),
-        color: 0xe8c8b0,
-        roughness: 0.86,
-        metalness: 0.06,
+        color: 0xffffff,
+        emissive: 0x4a0808,
+        roughness: 0.78,
+        metalness: 0.12,
       });
       rockTiers.set(tiles, m);
       mats.push(m);
@@ -75,23 +90,17 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
     emissive: 0xff4a18,
     emissiveIntensity: 0.82,
   });
-  const lavaMat = new THREE.MeshBasicMaterial({
+  const lavaMat = new THREE.MeshStandardMaterial({
     map: lavaTex,
-    transparent: true,
-    opacity: 0.82,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
+    color: 0xffd27a,
+    emissive: 0xff5a14,
+    emissiveMap: lavaTex,
+    emissiveIntensity: 1.55,
+    roughness: 0.32,
+    metalness: 0.08,
     toneMapped: false,
   });
-  const ventMat = new THREE.MeshBasicMaterial({
-    color: 0xffa04a,
-    transparent: true,
-    opacity: 0.86,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  mats.push(earthMat, rockMat, padMat, lavaMat, ventMat);
+  mats.push(earthMat, rockMat, padMat, lavaMat);
 
   const pulse = (color: number) => {
     const mat = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.2 });
@@ -126,20 +135,44 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
 
   const groundGeo = new THREE.PlaneGeometry(WIDTH, DEPTH, 24, 18);
   const pos = groundGeo.getAttribute("position") as THREE.BufferAttribute;
-  for (let i = 0; i < pos.count; i++) pos.setZ(i, -pos.getY(i) * SLOPE);
+  const uv = groundGeo.getAttribute("uv") as THREE.BufferAttribute;
+  const tile = 7;
+  for (let i = 0; i < pos.count; i++) {
+    uv.setXY(i, pos.getX(i) / tile, pos.getY(i) / tile);
+    pos.setZ(i, -pos.getY(i) * SLOPE);
+  }
   pos.needsUpdate = true;
+  uv.needsUpdate = true;
   groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, earthMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   group.add(ground);
-  const lavaSurface = new THREE.Mesh(groundGeo, lavaMat);
-  lavaSurface.rotation.x = -Math.PI / 2;
-  lavaSurface.position.y = 0.035;
-  lavaSurface.renderOrder = 1;
-  lavaSurface.frustumCulled = false;
-  group.add(lavaSurface);
   geos.push(groundGeo);
+
+  const floorLamps: THREE.PointLight[] = [];
+  const lampSpots: Array<[number, number]> = isLoDevice()
+    ? [
+        [0, -18],
+        [0, 0],
+        [0, 16],
+      ]
+    : [
+        [0, -18],
+        [-22, 4],
+        [22, 8],
+        [0, 16],
+        [-32, -8],
+        [32, -10],
+        [0, 0],
+      ];
+  for (const [x, z] of lampSpots) {
+    const lamp = new THREE.PointLight(0xff5a1c, 2.1, 18, 1.55);
+    lamp.castShadow = false;
+    lamp.position.set(x, floorY(z) + 0.55, z);
+    group.add(lamp);
+    floorLamps.push(lamp);
+  }
 
   const rocks: Array<[number, number, number, number, number]> = [
     [-34, -24, 5.2, 2.8, 5],
@@ -165,7 +198,9 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   wall(14, 16, 14);
   addBox(batch, solids, rockFor(4), 0, floorY(-8), -8, 5.2, 1.7, 4);
   const nest = (x: number, z: number) => {
-    addBox(batch, solids, rockFor(5), x, floorY(z), z, 6.2, 2.5, 5.2);
+    const y = floorY(z);
+    addBox(batch, solids, rockFor(5), x, y, z, 6.2, 1.62, 5.2);
+    addBox(batch, solids, rockFor(3), x + (x < 0 ? 3.4 : -3.4), y, z, 2.6, 0.82, 3.2);
   };
   nest(-22, 6);
   nest(22, 6);
@@ -185,27 +220,47 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   }));
   const padMesh = instanceCylinders(group, padMat, padSpots, 1.12, 1.22, 0.16);
   geos.push(padMesh.geo);
+  stampJumpPads(group, mats, geos, padSpots.map((p) => ({ ...p, y: p.y + 0.1 })), 1.14);
   lights.addPad(group, -28, -22, floorY(-22) + 0.6);
   lights.addPad(group, 28, -22, floorY(-22) + 0.6);
   lights.addPad(group, -36, 8, floorY(8) + 0.6);
   lights.addPad(group, 36, 8, floorY(8) + 0.6);
 
-  // Fisuras termales: zona de riesgo legible, no una trampa instantánea.
-  const ventSpots = [
-    { x: -8, z: -4, radius: 1.35 },
-    { x: 10, z: 8, radius: 1.45 },
-    { x: -22, z: 17, radius: 1.25 },
+  // Fisuras térmicas: grietas de lava que queman al pisarlas. El atajo vale si no te quedas.
+  const cracks: Array<{ x: number; z: number; along: "x" | "z"; len: number; wid: number }> = [
+    { x: 0, z: -12, along: "x", len: 18, wid: 2.25 },
+    { x: -12, z: 10, along: "z", len: 16, wid: 2.1 },
+    { x: 26, z: -6, along: "z", len: 12.5, wid: 2.05 },
+    { x: -28, z: 14, along: "x", len: 12, wid: 2.05 },
   ];
-  const ventMeshes: THREE.Mesh[] = [];
-  for (const vent of ventSpots) {
-    const y = floorY(vent.z) + 0.045;
-    hazards.push({ x: vent.x, y, z: vent.z, radius: vent.radius, damage: 9, color: 0xff5a1f });
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(vent.radius, 0.075, 6, 18), ventMat);
-    ring.rotation.x = Math.PI / 2;
-    ring.position.set(vent.x, y, vent.z);
-    ring.renderOrder = 3;
-    group.add(ring);
-    ventMeshes.push(ring);
+  const crackGeo = new THREE.PlaneGeometry(1, 1);
+  crackGeo.rotateX(-Math.PI / 2);
+  geos.push(crackGeo);
+  for (const crack of cracks) {
+    const y = floorY(crack.z);
+    const alongX = crack.along === "x";
+    const visW = alongX ? crack.len : crack.wid;
+    const visD = alongX ? crack.wid : crack.len;
+    hazards.push({
+      x: crack.x,
+      y,
+      z: crack.z,
+      radius: Math.max(crack.len, crack.wid) * 0.55,
+      hx: (alongX ? crack.len : crack.wid) * 0.42,
+      hz: (alongX ? crack.wid : crack.len) * 0.42,
+      damage: 16,
+      color: 0xff5a14,
+    });
+    const core = new THREE.Mesh(crackGeo, lavaMat);
+    core.position.set(crack.x, y + 0.03, crack.z);
+    core.scale.set(visW * 0.92, 1, visD * 0.72);
+    group.add(core);
+    if (!isLoDevice()) {
+      const glow = new THREE.PointLight(0xff6418, 2.2, 11, 1.55);
+      glow.castShadow = false;
+      glow.position.set(crack.x, y + 0.45, crack.z);
+      group.add(glow);
+    }
   }
 
   for (const z of [-28, -14, 0, 14, 28]) {
@@ -233,15 +288,75 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   drop("lave-ammo", "ammo", -30, 18, 10);
   drop("lave-scatter", "scatter", -18, -20, 16);
   drop("lave-torpedo", "torpedo", 0, 10, 18);
-  items.push({ id: "lave-lance", kind: "lance", x: -22, y: floorY(6) + 2.5, z: 6, respawn: 18 });
-  items.push({ id: "lave-nest-health", kind: "health", x: 22, y: floorY(6) + 2.5, z: 6, respawn: 12 });
+  items.push({ id: "lave-lance", kind: "lance", x: -22, y: floorY(6) + 1.62, z: 6, respawn: 18 });
+  items.push({ id: "lave-nest-health", kind: "health", x: 22, y: floorY(6) + 1.62, z: 6, respawn: 12 });
   drop("lave-ion", "ion", 0, 2, 20);
+  drop("lave-fauces", "fauces", 18, -12, 22);
+  drop("lave-bate", "bate", -8, 8, 18);
+  drop("lave-martillo", "martillo", 8, 16, 24);
   drop("lave-rush", "rush", 8, -15, 22);
   drop("lave-blink", "blink", -8, 16, 22);
   drop("lave-volt", "volt", 0, 0, 22);
+  drop("lave-leap", "leap", 20, -8, 24);
 
-  const skyTex = loadSkyTex("/textures/lave-sky.jpg");
-  const skyGeo = new THREE.SphereGeometry(240, 32, 20);
+  const vents = [
+    ...cracks.map((c) => ({ x: c.x, z: c.z, spread: Math.max(c.len, c.wid) * 0.35 })),
+    { x: -8, z: -6, spread: 3.2 },
+    { x: 10, z: 6, spread: 3.6 },
+    { x: 0, z: 22, spread: 4.2 },
+    { x: -24, z: 2, spread: 2.8 },
+    { x: 24, z: -14, spread: 3 },
+  ];
+  const smokeN = isLoDevice() ? 18 : 28;
+  const smokePos = new Float32Array(smokeN * 3);
+  const smokeCol = new Float32Array(smokeN * 3);
+  type Puff = { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; heat: number };
+  const puffs: Puff[] = [];
+  const seedPuff = (p: Puff, i: number) => {
+    const v = vents[i % vents.length]!;
+    p.x = v.x + (Math.random() - 0.5) * v.spread;
+    p.z = v.z + (Math.random() - 0.5) * v.spread;
+    p.y = floorY(p.z) + 0.15 + Math.random() * 0.4;
+    p.vx = (Math.random() - 0.5) * 0.55;
+    p.vy = 0.7 + Math.random() * 1.35;
+    p.vz = (Math.random() - 0.5) * 0.55;
+    p.max = 2.1 + Math.random() * 2.4;
+    p.life = Math.random() * p.max;
+    p.heat = Math.random();
+  };
+  for (let i = 0; i < smokeN; i++) {
+    const p: Puff = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, heat: 0 };
+    seedPuff(p, i);
+    puffs.push(p);
+  }
+  const smokeGeo = new THREE.BufferGeometry();
+  const smokePosAttr = new THREE.BufferAttribute(smokePos, 3).setUsage(THREE.DynamicDrawUsage);
+  const smokeColAttr = new THREE.BufferAttribute(smokeCol, 3).setUsage(THREE.DynamicDrawUsage);
+  smokeGeo.setAttribute("position", smokePosAttr);
+  smokeGeo.setAttribute("color", smokeColAttr);
+  smokeGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 4, 0), 80);
+  const smokeMap = laveSmokeTex();
+  const smokeMat = new THREE.PointsMaterial({
+    map: smokeMap,
+    color: 0xffffff,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+    size: 3.6,
+    sizeAttenuation: true,
+    fog: true,
+  });
+  mats.push(smokeMat);
+  geos.push(smokeGeo);
+  const smoke = new THREE.Points(smokeGeo, smokeMat);
+  smoke.frustumCulled = false;
+  smoke.renderOrder = 6;
+  group.add(smoke);
+
+  const skyTex = loadSpaceSky("lave");
+  const skyGeo = skySphereGeo();
   const skyMat = new THREE.MeshBasicMaterial({
     map: skyTex,
     side: THREE.BackSide,
@@ -268,15 +383,37 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
     spawns,
     waypoints,
     lights,
-    update: (now) => {
-      lavaTex.offset.x = (now * 0.014) % 1;
-      lavaTex.offset.y = (now * -0.021) % 1;
-      lavaMat.opacity = 0.68 + 0.14 * (0.5 + 0.5 * Math.sin(now * 1.15));
-      earthMat.emissiveIntensity = 0.1 + 0.035 * (0.5 + 0.5 * Math.sin(now * 0.8));
-      for (let i = 0; i < ventMeshes.length; i++) {
-        const p = 0.86 + Math.sin(now * 3.2 + i * 1.7) * 0.14;
-        ventMeshes[i]!.scale.setScalar(p);
+    update: (now, dt = 1 / 60) => {
+      lavaTex.offset.x = (now * 0.08) % 1;
+      lavaTex.offset.y = (now * -0.045) % 1;
+      lavaMat.emissiveIntensity = 1.25 + 0.55 * (0.5 + 0.5 * Math.sin(now * 3.4));
+      earthMat.emissiveIntensity = 1.02 + 0.28 * (0.5 + 0.5 * Math.sin(now * 1.15));
+      const pulse = 0.5 + 0.5 * Math.sin(now * 2.2);
+      for (let i = 0; i < floorLamps.length; i++) {
+        floorLamps[i]!.intensity = 1.7 + 0.7 * Math.sin(now * 1.8 + i * 0.9);
       }
+      for (let i = 0; i < puffs.length; i++) {
+        const p = puffs[i]!;
+        p.life += dt;
+        if (p.life >= p.max) seedPuff(p, i);
+        const t = p.life / p.max;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.z += p.vz * dt;
+        p.vx += Math.sin(now * 0.7 + i) * 0.12 * dt;
+        p.vz += Math.cos(now * 0.55 + i) * 0.12 * dt;
+        const fade = t < 0.18 ? t / 0.18 : 1 - (t - 0.18) / 0.82;
+        const a = Math.max(0, fade);
+        smokePos[i * 3] = p.x;
+        smokePos[i * 3 + 1] = p.y;
+        smokePos[i * 3 + 2] = p.z;
+        smokeCol[i * 3] = (0.22 + p.heat * 0.55) * a;
+        smokeCol[i * 3 + 1] = (0.16 + p.heat * 0.18) * a;
+        smokeCol[i * 3 + 2] = 0.12 * a;
+      }
+      smokePosAttr.needsUpdate = true;
+      smokeColAttr.needsUpdate = true;
+      smokeMat.opacity = 0.58 + 0.12 * pulse;
     },
     dispose: () => {
       scene.remove(group);
@@ -288,6 +425,7 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
       });
       for (const geo of geos) geo.dispose();
       for (const mat of mats) mat.dispose();
+      smokeMap.dispose();
     },
   };
 }

@@ -28,9 +28,15 @@ export class FrameLoop {
   }
 
   consumeFixed(tick: (dt: number) => void) {
-    while (this.acc >= this.step) {
-      tick(this.step);
-      this.acc -= this.step;
+    let n = 0;
+    while (this.acc >= this.step && n < 5) {
+      try {
+        tick(this.step);
+      } finally {
+        this.acc -= this.step;
+        n += 1;
+      }
     }
+    if (this.acc > this.step * 2) this.acc = this.step;
   }
 }

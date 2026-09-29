@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { WeaponId } from "./types";
 import { WEAPON_META } from "./constants";
-import { gunMetalTex, pixelWeaponTex } from "./textures";
+import { gunMetalTex, loadTex, pixelWeaponTex, weaponPlateFile } from "./textures";
+import { hasWeaponPack, mountPackView, mountPackWorld, packPose, packRotation } from "./weaponPack";
 
 const LAYER = 1;
 
@@ -26,31 +27,24 @@ function pack(): PackMaps {
       heat: pixelWeaponTex("heat", 1.8, 3.2),
       ceramic: pixelWeaponTex("steel", 2.1, 2.1),
     };
-    packMaps.steel.anisotropy = 8;
+    packMaps.steel.anisotropy = 2;
     packMaps.steel.colorSpace = THREE.SRGBColorSpace;
   }
   return packMaps;
 }
 
-function steel(color: number, metal = 0.92, rough = 0.16, map = true) {
-  const tex = pack();
+function plate(file: string, metal: number, rough: number, repeat = 2.35, tint = 0x8a9098, emit = 0.1) {
+  const map = loadTex(`/textures/weapons/${file}`, repeat, repeat);
+  map.anisotropy = 2;
   return new THREE.MeshStandardMaterial({
-    color,
-    map: map ? tex.steel : null,
-    roughnessMap: map ? tex.rough : null,
+    color: tint,
+    map,
+    emissive: tint,
+    emissiveMap: map,
+    emissiveIntensity: emit,
     metalness: metal,
     roughness: rough,
-    envMapIntensity: 1.48,
-  });
-}
-
-function polymer(color = 0x2a3036) {
-  return new THREE.MeshStandardMaterial({
-    color,
-    map: pack().grip,
-    metalness: 0.14,
-    roughness: 0.72,
-    envMapIntensity: 0.28,
+    envMapIntensity: 0.48,
   });
 }
 
@@ -206,16 +200,24 @@ function optic(k: Kit, z = 0.02) {
 function glove(k: Kit, side: 1 | -1 = 1) {
   const g = new THREE.Group();
   const s = side;
-  g.add(box(k.glove, 0.086, 0.052, 0.11, 0.068 * s, -0.118, 0.086, 0.32));
-  g.add(box(k.glove, 0.054, 0.042, 0.074, 0.06 * s, -0.168, 0.118, 0.18));
-  g.add(box(k.dark, 0.09, 0.018, 0.04, 0.068 * s, -0.1, 0.07));
+  const x = 0.068 * s;
+  g.add(box(k.dark, 0.08, 0.046, 0.098, x, -0.116, 0.088, 0.3));
+  g.add(box(k.chrome, 0.07, 0.01, 0.08, x, -0.09, 0.082, 0.3));
+  g.add(box(k.dark, 0.074, 0.02, 0.028, x, -0.098, 0.046, 0.12));
+  g.add(cyl(k.chrome, 0.026, 0.026, 0.016, x, -0.128, 0.122, 8, 0.45));
+  g.add(box(k.accent, 0.022, 0.008, 0.032, x + 0.012 * s, -0.094, 0.092));
   for (let i = 0; i < 4; i++) {
-    const fy = -0.086 - i * 0.02;
-    g.add(box(k.glove, 0.02, 0.016, 0.056, 0.04 * s, fy, 0.036, 0.12, 0, 0.38 * s));
-    g.add(box(k.chrome, 0.012, 0.01, 0.014, 0.05 * s, fy, 0.01));
+    const fy = -0.084 - i * 0.019;
+    const fx = 0.046 * s;
+    g.add(box(k.dark, 0.018, 0.015, 0.034, fx, fy, 0.03, 0.12, 0, 0.34 * s));
+    g.add(cyl(k.chrome, 0.0065, 0.0065, 0.012, fx, fy, 0.012, 6, 0));
+    g.add(box(k.dark, 0.015, 0.013, 0.026, fx - 0.004 * s, fy - 0.004, 0.0, 0.2, 0, 0.42 * s));
+    g.add(box(k.chrome, 0.01, 0.008, 0.01, fx - 0.006 * s, fy - 0.006, -0.014, 0.15, 0, 0.42 * s));
   }
-  g.add(box(k.glove, 0.022, 0.02, 0.05, 0.014 * s, -0.072, 0.118, 0.08, 0.42 * s, 0.18));
-  g.add(box(k.accent, 0.016, 0.01, 0.03, 0.078 * s, -0.108, 0.1));
+  g.add(box(k.dark, 0.02, 0.018, 0.042, 0.018 * s, -0.074, 0.112, 0.08, 0.48 * s, 0.16));
+  g.add(cyl(k.chrome, 0.007, 0.007, 0.012, 0.012 * s, -0.068, 0.128, 6, 0.2));
+  g.add(box(k.dark, 0.016, 0.014, 0.028, 0.006 * s, -0.062, 0.142, 0.04, 0.55 * s, 0.1));
+  g.add(box(k.accent, 0.01, 0.008, 0.012, 0.004 * s, -0.056, 0.156));
   return tag(g);
 }
 
@@ -223,9 +225,12 @@ function sleeve(k: Kit, side: 1 | -1 = 1) {
   const g = new THREE.Group();
   g.name = "vm-sleeve";
   const s = side;
-  g.add(cyl(k.glove, 0.038, 0.048, 0.16, 0.078 * s, -0.2, 0.16, 10, 1.05));
-  g.add(box(k.dark, 0.08, 0.036, 0.07, 0.078 * s, -0.14, 0.132, 0.35));
-  g.add(box(k.accent, 0.012, 0.04, 0.05, 0.11 * s, -0.16, 0.14));
+  const x = 0.078 * s;
+  g.add(cyl(k.dark, 0.03, 0.042, 0.15, x, -0.198, 0.158, 8, 1.08));
+  g.add(box(k.chrome, 0.07, 0.028, 0.062, x, -0.148, 0.128, 0.32));
+  g.add(box(k.dark, 0.078, 0.012, 0.08, x, -0.168, 0.142, 0.32));
+  g.add(box(k.accent, 0.01, 0.046, 0.055, x + 0.034 * s, -0.162, 0.138));
+  g.add(cyl(k.chrome, 0.022, 0.022, 0.014, x, -0.232, 0.182, 8, 1.08));
   g.add(glove(k, side));
   return tag(g);
 }
@@ -244,14 +249,14 @@ function flashMat() {
 function flash(id: WeaponId) {
   const g = new THREE.Group();
   g.name = "muzzle";
-  const s = id === "scatter" ? 0.11 : id === "torpedo" ? 0.13 : id === "lance" ? 0.07 : id === "ion" ? 0.08 : 0.12;
+  const s = id === "scatter" ? 0.11 : id === "fauces" ? 0.14 : id === "torpedo" ? 0.13 : id === "lance" ? 0.07 : id === "ion" ? 0.08 : 0.12;
   const core = new THREE.Mesh(new THREE.SphereGeometry(s * 0.55, 10, 8), flashMat());
   const blade = new THREE.Mesh(new THREE.PlaneGeometry(s * 3.4, s * 1.15), flashMat());
   const blade2 = new THREE.Mesh(new THREE.PlaneGeometry(s * 1.2, s * 3.1), flashMat());
   blade.rotation.y = Math.PI / 2;
   g.add(core, blade, blade2);
-  const z = id === "lance" ? -0.82 : id === "torpedo" ? -0.56 : id === "ion" ? -0.42 : id === "scatter" ? -0.52 : -0.42;
-  const y = id === "torpedo" ? 0.06 : id === "ion" || id === "scatter" || id === "lance" ? 0.036 : 0.052;
+  const z = id === "lance" ? -0.82 : id === "fauces" ? -0.36 : id === "torpedo" ? -0.4 : id === "ion" ? -0.42 : id === "scatter" ? -0.52 : -0.42;
+  const y = id === "fauces" ? 0.05 : id === "torpedo" ? 0.046 : id === "ion" || id === "scatter" || id === "lance" ? 0.036 : 0.052;
   g.position.set(0, y, z);
   return tag(g);
 }
@@ -324,22 +329,33 @@ function buildScatter(k: Kit) {
 
 function buildTorpedo(k: Kit) {
   const g = new THREE.Group();
-  g.add(cyl(k.body, 0.062, 0.066, 0.6, 0, 0.062, -0.08, 14));
-  g.add(cyl(k.dark, 0.07, 0.07, 0.11, 0, 0.062, 0.2, 14));
-  g.add(cyl(k.chrome, 0.052, 0.046, 0.1, 0, 0.062, -0.4, 14));
-  g.add(cone(k.dark, 0.082, 0.11, 0, 0.062, -0.5));
-  g.add(ring(k.chrome, 0.07, 0.009, 0, 0.062, -0.16));
-  g.add(ring(k.accent, 0.064, 0.008, 0, 0.062, -0.02));
-  g.add(box(k.body, 0.13, 0.095, 0.22, 0, 0.012, 0.22));
-  g.add(box(k.dark, 0.085, 0.075, 0.13, 0.095, 0.085, 0.04));
-  g.add(box(k.accent, 0.055, 0.032, 0.065, 0.11, 0.128, 0.04));
-  g.add(cyl(k.dark, 0.016, 0.016, 0.09, 0.11, 0.128, -0.04, 8));
-  g.add(box(k.accent, 0.02, 0.045, 0.3, 0.068, 0.062, -0.08));
-  g.add(box(k.dark, 0.04, 0.05, 0.16, 0, 0.12, 0.04));
+  g.add(box(k.body, 0.16, 0.11, 0.26, 0, 0.04, 0.04));
+  g.add(box(k.dark, 0.15, 0.028, 0.2, 0, 0.102, 0.02));
+  g.add(box(k.body, 0.125, 0.1, 0.16, 0, 0.046, -0.16));
+  g.add(box(k.dark, 0.078, 0.055, 0.07, 0, 0.042, -0.26));
+  g.add(box(k.chrome, 0.1, 0.018, 0.04, 0, 0.078, -0.3));
+  g.add(box(k.chrome, 0.1, 0.016, 0.036, 0, 0.012, -0.3));
+  for (let i = 0; i < 5; i++) {
+    const x = -0.036 + i * 0.018;
+    g.add(box(k.chrome, 0.012, 0.02, 0.022, x, 0.07, -0.318, 0.35));
+    g.add(box(k.chrome, 0.012, 0.016, 0.02, x, 0.016, -0.312, -0.3));
+  }
+  const port = cyl(k.dark, 0.028, 0.028, 0.02, 0.09, 0.048, 0.03, 14, 0);
+  port.rotation.z = Math.PI / 2;
+  g.add(port);
+  const bezel = ring(k.chrome, 0.032, 0.005, 0.098, 0.048, 0.03, 0);
+  bezel.rotation.y = Math.PI / 2;
+  g.add(bezel);
+  g.add(box(k.dark, 0.04, 0.07, 0.1, -0.09, 0.05, 0.02));
+  g.add(box(k.accent, 0.012, 0.04, 0.06, 0.078, 0.09, -0.08));
+  const cableTints = [k.accent, k.chrome, k.dark, k.grip];
+  for (let i = 0; i < cableTints.length; i++) {
+    g.add(box(cableTints[i]!, 0.008, 0.008, 0.14, -0.028 + i * 0.016, 0.122, 0.06));
+  }
+  g.add(box(k.dark, 0.05, 0.04, 0.08, 0.07, 0.02, 0.14));
   g.add(trigger(k));
   g.add(pistolGrip(k));
-  g.add(box(k.grip, 0.05, 0.085, 0.055, 0.095, -0.02, 0.14));
-  g.add(stock(k, 0.34));
+  g.add(stock(k, 0.28));
   g.add(sleeve(k, 1));
   g.add(sleeve(k, -1));
   return g;
@@ -366,6 +382,65 @@ function buildLance(k: Kit) {
   g.add(stock(k, 0.32));
   g.add(sleeve(k, 1));
   g.add(sleeve(k, -1));
+  return g;
+}
+
+function buildFauces(k: Kit) {
+  const g = new THREE.Group();
+  g.add(box(k.body, 0.16, 0.13, 0.22, 0, 0.045, 0.04));
+  g.add(box(k.dark, 0.018, 0.16, 0.16, 0.088, 0.05, 0.02));
+  g.add(box(k.body, 0.13, 0.038, 0.18, 0, 0.095, -0.16));
+  g.add(box(k.body, 0.13, 0.032, 0.18, 0, 0.004, -0.16));
+  for (let i = 0; i < 4; i++) {
+    const x = -0.045 + i * 0.03;
+    g.add(box(k.chrome, 0.016, 0.028, 0.02, x, 0.072, -0.25, 0.4));
+    g.add(box(k.chrome, 0.016, 0.024, 0.018, x, 0.02, -0.246, -0.35));
+  }
+  g.add(cyl(k.dark, 0.028, 0.034, 0.08, 0, 0.05, -0.28, 12));
+  g.add(sphere(k.accent, 0.016, 0, 0.05, -0.3, 10));
+  const port = cyl(k.dark, 0.026, 0.026, 0.018, 0.1, 0.05, 0.02, 12, 0);
+  port.rotation.z = Math.PI / 2;
+  g.add(port);
+  const bezel = ring(k.chrome, 0.03, 0.005, 0.108, 0.05, 0.02, 0);
+  bezel.rotation.y = Math.PI / 2;
+  g.add(bezel);
+  g.add(box(k.accent, 0.008, 0.008, 0.12, 0.02, 0.118, 0.04));
+  g.add(box(k.chrome, 0.008, 0.008, 0.12, 0.034, 0.112, 0.05));
+  g.add(box(k.grip, 0.008, 0.008, 0.11, 0.048, 0.104, 0.06));
+  g.add(box(k.dark, 0.07, 0.05, 0.08, 0.02, 0.02, 0.14));
+  g.add(trigger(k));
+  g.add(pistolGrip(k));
+  g.add(stock(k, 0.26));
+  g.add(sleeve(k, 1));
+  g.add(sleeve(k, -1));
+  return g;
+}
+
+function buildKnife(k: Kit) {
+  const g = new THREE.Group();
+  g.add(box(k.grip, 0.03, 0.034, 0.12, 0, 0.02, 0.1));
+  g.add(box(k.chrome, 0.016, 0.09, 0.38, 0, 0.055, -0.12));
+  g.add(box(k.chrome, 0.012, 0.045, 0.05, 0, 0.04, -0.32));
+  g.add(box(k.dark, 0.028, 0.018, 0.04, 0, 0.04, 0.02));
+  g.add(trigger(k));
+  return g;
+}
+
+function buildBate(k: Kit) {
+  const g = new THREE.Group();
+  g.add(cyl(k.grip, 0.018, 0.022, 0.28, 0, 0.04, 0.02, 10));
+  g.add(cyl(k.body, 0.028, 0.034, 0.34, 0, 0.05, -0.22, 12));
+  g.add(sphere(k.body, 0.036, 0, 0.05, -0.4, 12));
+  g.add(box(k.dark, 0.02, 0.02, 0.04, 0, 0.03, 0.14));
+  return g;
+}
+
+function buildMartillo(k: Kit) {
+  const g = new THREE.Group();
+  g.add(cyl(k.grip, 0.016, 0.02, 0.32, 0, 0.03, -0.02, 10));
+  g.add(box(k.chrome, 0.11, 0.07, 0.07, 0, 0.04, -0.2));
+  g.add(box(k.dark, 0.07, 0.045, 0.05, 0, 0.04, -0.2));
+  g.add(box(k.grip, 0.03, 0.02, 0.04, 0, 0.02, 0.14));
   return g;
 }
 
@@ -418,79 +493,152 @@ function pixelProSkin(g: THREE.Group, k: Kit, id: WeaponId) {
   return g;
 }
 
-export function buildViewmodel(id: WeaponId): THREE.Group {
-  const col = WEAPON_META[id].color;
+const WEAPON_TINT: Record<WeaponId, { body: number; dark: number; chrome: number; grip: number }> = {
+  pulse: { body: 0x7a6224, dark: 0x26282c, chrome: 0x1e5c56, grip: 0x5a4416 },
+  scatter: { body: 0x6e1410, dark: 0x220c0c, chrome: 0x5c1c14, grip: 0x42100c },
+  torpedo: { body: 0x6d6758, dark: 0x2c2a26, chrome: 0x8a8172, grip: 0x3e382c },
+  lance: { body: 0x0c3836, dark: 0x120e1c, chrome: 0x105854, grip: 0x102232 },
+  ion: { body: 0x0e3250, dark: 0x0a1828, chrome: 0x144860, grip: 0x0e2434 },
+  fauces: { body: 0xc4b7a4, dark: 0x6a6458, chrome: 0xd5d8dc, grip: 0x7a7064 },
+  knife: { body: 0xbcc8d4, dark: 0x3a4048, chrome: 0xa9d6df, grip: 0x2a2420 },
+  bate: { body: 0xa99b88, dark: 0x4a3018, chrome: 0xc0b9ae, grip: 0x8a5a2c },
+  martillo: { body: 0x8e969e, dark: 0x2c3138, chrome: 0xd0d6dc, grip: 0x5a4634 },
+};
+
+const VM_SCALE: Record<WeaponId, number> = {
+  pulse: 0.5,
+  scatter: 0.7,
+  torpedo: 0.66,
+  lance: 0.72,
+  ion: 0.68,
+  fauces: 0.74,
+  knife: 0.86,
+  bate: 0.8,
+  martillo: 0.78,
+};
+
+export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color): THREE.Group {
+  const col = accent;
+  const tint = WEAPON_TINT[id];
   const k: Kit = {
-    dark: new THREE.MeshStandardMaterial({
-      color: 0x4a545e,
-      map: pack().steel,
-      roughnessMap: pack().rough,
-      metalness: 0.62,
-      roughness: 0.34,
-      envMapIntensity: 0.95,
-    }),
-    body: steel(0xd0d8e0, 0.94, 0.14),
-    chrome: steel(0xeef3f8, 0.98, 0.055),
-    grip: polymer(0x2c3238),
-    glove: polymer(0x3a3330),
-    accent: lamp(col, id === "ion" || id === "lance" ? 1.85 : 1.4),
+    dark: plate(weaponPlateFile(id, "dark"), 0.34, 0.56, 2.6, tint.dark, 0.05),
+    body: plate(weaponPlateFile(id, "body"), 0.16, 0.48, 2.15, tint.body, 0.16),
+    chrome: plate(weaponPlateFile(id, "chrome"), 0.52, 0.34, id === "knife" ? 1.15 : 2.8, tint.chrome, id === "knife" ? 0.12 : 0.22),
+    grip: plate(weaponPlateFile(id, "grip"), 0.1, 0.74, 3.1, tint.grip, 0.06),
+    glove: plate(weaponPlateFile(id, "dark"), 0.5, 0.38, 2.2, 0x3a424c, 0.06),
+    accent: lamp(col, id === "ion" || id === "lance" ? 2.45 : 2.1),
   };
   const g = new THREE.Group();
-  if (id === "pulse") {
-    const gun = buildPulse(k);
-    gun.scale.setScalar(0.56);
-    g.add(gun, sleeve(k));
-  } else {
-    g.add(id === "scatter" ? buildScatter(k) : id === "torpedo" ? buildTorpedo(k) : id === "lance" ? buildLance(k) : buildIon(k));
-  }
-  const weaponBody = g.children[0] as THREE.Group | undefined;
-  if (weaponBody) pixelProSkin(weaponBody, k, id);
   const muzzle = flash(id);
-  if (id === "pulse") {
-    muzzle.scale.setScalar(0.56);
-    muzzle.position.multiplyScalar(0.56);
-  }
   g.add(muzzle);
+  const fallback = new THREE.Group();
+  fallback.name = "procedural-fallback";
+  g.add(fallback);
+  {
+    const gun = id === "pulse"
+      ? buildPulse(k)
+      : id === "scatter"
+        ? buildScatter(k)
+        : id === "torpedo"
+          ? buildTorpedo(k)
+          : id === "lance"
+            ? buildLance(k)
+            : id === "fauces"
+              ? buildFauces(k)
+              : id === "knife"
+                ? buildKnife(k)
+                : id === "bate"
+                  ? buildBate(k)
+                  : id === "martillo"
+                    ? buildMartillo(k)
+                    : buildIon(k);
+    fallback.add(gun);
+    if (id === "pulse") fallback.add(sleeve(k));
+    if (id !== "ion" && id !== "torpedo" && id !== "fauces" && id !== "knife" && id !== "bate" && id !== "martillo") pixelProSkin(gun, k, id);
+  }
+  g.scale.setScalar(VM_SCALE[id]);
   g.layers.set(LAYER);
-  g.rotation.y = 0.02;
-  g.rotation.z = -0.018;
+  if (hasWeaponPack(id)) {
+    // Imported models already have individual physical sizes; don't scale twice.
+    g.scale.setScalar(1);
+    fallback.scale.setScalar(VM_SCALE[id]);
+    muzzle.position.multiplyScalar(VM_SCALE[id]);
+    const slot = new THREE.Group();
+    slot.name = "pack";
+    g.add(slot);
+    mountPackView(slot, id, muzzle, fallback);
+    g.rotation.copy(packRotation(id));
+  } else {
+    g.rotation.y = 0.02;
+    g.rotation.z = -0.018;
+  }
   return g;
 }
 
 export function restPose(id: WeaponId): THREE.Vector3 {
-  if (id === "lance") return new THREE.Vector3(0.248, -0.172, -0.52);
-  if (id === "torpedo") return new THREE.Vector3(0.255, -0.2, -0.48);
-  if (id === "scatter") return new THREE.Vector3(0.25, -0.18, -0.46);
-  if (id === "ion") return new THREE.Vector3(0.236, -0.158, -0.42);
-  return new THREE.Vector3(0.22, -0.16, -0.46);
+  if (hasWeaponPack(id)) {
+    return packPose(id);
+  }
+  if (id === "lance") return new THREE.Vector3(0.282, -0.228, -0.58);
+  if (id === "torpedo") return new THREE.Vector3(0.29, -0.248, -0.54);
+  if (id === "scatter") return new THREE.Vector3(0.286, -0.232, -0.52);
+  if (id === "fauces") return new THREE.Vector3(0.3, -0.25, -0.5);
+  if (id === "knife") return new THREE.Vector3(0.24, -0.16, -0.36);
+  if (id === "bate") return new THREE.Vector3(0.28, -0.18, -0.4);
+  if (id === "martillo") return new THREE.Vector3(0.3, -0.2, -0.42);
+  if (id === "ion") return new THREE.Vector3(0.27, -0.21, -0.48);
+  return new THREE.Vector3(0.258, -0.208, -0.52);
 }
 
 export function adsPose(id: WeaponId): THREE.Vector3 {
+  if (hasWeaponPack(id)) {
+    return packPose(id, true);
+  }
   if (id === "lance") return new THREE.Vector3(0.02, -0.255, -0.64);
   if (id === "torpedo") return new THREE.Vector3(0.028, -0.275, -0.6);
   if (id === "scatter") return new THREE.Vector3(0.022, -0.26, -0.58);
+  if (id === "fauces") return new THREE.Vector3(0.03, -0.27, -0.56);
+  if (id === "knife") return new THREE.Vector3(0.16, -0.14, -0.32);
+  if (id === "bate") return new THREE.Vector3(0.18, -0.16, -0.36);
+  if (id === "martillo") return new THREE.Vector3(0.2, -0.18, -0.38);
   if (id === "ion") return new THREE.Vector3(0.02, -0.24, -0.6);
   return new THREE.Vector3(0.01, -0.09, -0.5);
 }
 
 export function buildWorldGun(
-  gunMat: THREE.Material,
-  dark: THREE.Material,
+  _gunMat: THREE.Material,
+  _dark: THREE.Material,
   glowMat: THREE.Material,
   style: WeaponId = "pulse",
 ): THREE.Group {
+  if (hasWeaponPack(style)) {
+    const g = new THREE.Group();
+    const fallback = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.24), _gunMat);
+    fallback.position.z = -0.08;
+    g.add(fallback);
+    const slot = new THREE.Group();
+    slot.name = "pack";
+    g.add(slot);
+    mountPackWorld(slot, style, fallback);
+    return g;
+  }
+  const tint = WEAPON_TINT[style];
+  const skin = plate(weaponPlateFile(style, "body"), 0.18, 0.48, 2.2, tint.body, 0.14);
+  const dark = plate(weaponPlateFile(style, "dark"), 0.34, 0.56, 2.5, tint.dark, 0.05);
+  const gripMat = plate(weaponPlateFile(style, "grip"), 0.1, 0.74, 2.8, tint.grip, 0.06);
+  const chrome = plate(weaponPlateFile(style, "chrome"), 0.52, 0.34, 2.6, tint.chrome, 0.18);
   const g = new THREE.Group();
   if (style === "scatter") {
-    const rec = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.22), gunMat);
+    const rec = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.22), skin);
     rec.position.set(0, 0.02, 0.08);
-    const b1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.32, 8), gunMat);
+    const b1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.32, 8), chrome);
     b1.rotation.x = Math.PI / 2;
     b1.position.set(0.028, 0.025, -0.12);
     const b2 = b1.clone();
     b2.position.x = -0.028;
     const mag = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, 0.1), dark);
     mag.position.set(0, -0.05, 0.02);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.045), dark);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.045), gripMat);
     grip.position.set(0, -0.07, 0.12);
     grip.rotation.x = 0.35;
     const sight = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.035, 0.06), glowMat);
@@ -499,24 +647,29 @@ export function buildWorldGun(
     return g;
   }
   if (style === "torpedo") {
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.38, 10), gunMat);
-    tube.rotation.x = Math.PI / 2;
-    tube.position.set(0, 0.04, -0.02);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.1, 8), dark);
-    nose.rotation.x = -Math.PI / 2;
-    nose.position.set(0, 0.04, -0.24);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.11, 0.05), dark);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.2), skin);
+    body.position.set(0, 0.03, 0.04);
+    const snout = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.1), dark);
+    snout.position.set(0, 0.032, -0.1);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.045), gripMat);
     grip.position.set(0, -0.05, 0.12);
     grip.rotation.x = 0.3;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.052, 0.01, 6, 12), glowMat);
-    ring.position.set(0, 0.04, -0.08);
-    g.add(tube, nose, grip, ring);
+    const port = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.02, 10), glowMat);
+    port.rotation.z = Math.PI / 2;
+    port.position.set(0.06, 0.034, 0.02);
+    const parts = [body, snout, grip, port];
+    for (let i = 0; i < 4; i++) {
+      const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.016), chrome);
+      tooth.position.set(-0.024 + i * 0.016, 0.058, -0.15);
+      parts.push(tooth);
+    }
+    g.add(...parts);
     return g;
   }
   if (style === "lance") {
-    const rec = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.16), gunMat);
+    const rec = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.055, 0.16), skin);
     rec.position.set(0, 0.02, 0.1);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.55, 8), gunMat);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.55, 8), chrome);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.025, -0.16);
     const rings = [ -0.04, -0.16, -0.28 ].map((z) => {
@@ -524,23 +677,23 @@ export function buildWorldGun(
       r.position.set(0, 0.025, z);
       return r;
     });
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.1, 0.04), dark);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.1, 0.04), gripMat);
     grip.position.set(0, -0.06, 0.12);
     grip.rotation.x = 0.35;
     g.add(rec, barrel, grip, ...rings);
     return g;
   }
   if (style === "pulse") {
-    const slide = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.16, 4, 10), gunMat);
+    const slide = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.16, 4, 10), skin);
     slide.rotation.x = Math.PI / 2;
     slide.position.set(0, 0.048, 0.02);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.22, 12), gunMat);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.012, 0.22, 12), chrome);
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0.03, -0.1);
     const frame = new THREE.Mesh(new THREE.CapsuleGeometry(0.016, 0.1, 3, 8), dark);
     frame.rotation.x = Math.PI / 2;
     frame.position.set(0, 0.016, 0.04);
-    const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.07, 3, 8), dark);
+    const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.07, 3, 8), gripMat);
     grip.position.set(0, -0.055, 0.1);
     grip.rotation.x = 0.5;
     const sight = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), glowMat);
@@ -549,10 +702,56 @@ export function buildWorldGun(
     g.scale.setScalar(0.72);
     return g;
   }
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.44, 8), gunMat);
+  if (style === "fauces") {
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.16), skin);
+    body.position.set(0, 0.03, 0.04);
+    const jawHi = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.028, 0.12), dark);
+    jawHi.position.set(0, 0.07, -0.08);
+    const jawLo = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.024, 0.12), dark);
+    jawLo.position.set(0, 0.0, -0.08);
+    const bore = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), glowMat);
+    bore.position.set(0, 0.034, -0.12);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.042), gripMat);
+    grip.position.set(0, -0.05, 0.12);
+    grip.rotation.x = 0.32;
+    g.add(body, jawHi, jawLo, bore, grip);
+    return g;
+  }
+  if (style === "knife" || style === "bate" || style === "martillo") {
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, style === "bate" ? 0.42 : 0.28, 6), gripMat);
+    handle.rotation.x = Math.PI / 2;
+    const head = style === "knife"
+      ? new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.07, 0.28), chrome)
+      : style === "bate"
+        ? new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.02, 0.22, 8), skin)
+        : new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.06), chrome);
+    if (style !== "knife") head.rotation.x = style === "bate" ? Math.PI / 2 : 0;
+    head.position.set(0, 0.02, style === "martillo" ? -0.16 : -0.18);
+    g.add(handle, head);
+    return g;
+  }
+  if (style === "ion") {
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 10), glowMat);
+    core.position.set(0, 0.045, -0.02);
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.012, 6, 14), glowMat);
+    coil.position.copy(core.position);
+    const coilB = coil.clone();
+    coilB.rotation.y = Math.PI / 2;
+    const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.026, 0.2, 8), chrome);
+    snout.rotation.x = Math.PI / 2;
+    snout.position.set(0, 0.045, -0.16);
+    const cell = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.1), skin);
+    cell.position.set(0, 0.02, 0.1);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.09, 0.04), gripMat);
+    grip.position.set(0, -0.05, 0.12);
+    grip.rotation.x = 0.4;
+    g.add(core, coil, coilB, snout, cell, grip);
+    return g;
+  }
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.44, 8), chrome);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.025, -0.1);
-  const rec = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.07, 0.2), gunMat);
+  const rec = new THREE.Mesh(new THREE.BoxGeometry(0.078, 0.07, 0.2), skin);
   rec.position.set(0, 0.022, 0.12);
   const mag = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.14, 0.055), dark);
   mag.position.set(0, -0.08, 0.08);
@@ -560,10 +759,10 @@ export function buildWorldGun(
   stock.position.set(0, 0.012, 0.25);
   const sight = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.038, 0.07), glowMat);
   sight.position.set(0, 0.068, 0.04);
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.1, 0.042), dark);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.1, 0.042), gripMat);
   grip.position.set(0, -0.07, 0.14);
   grip.rotation.x = 0.35;
-  const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.02, 0.04, 8), dark);
+  const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.02, 0.04, 8), chrome);
   brake.rotation.x = Math.PI / 2;
   brake.position.set(0, 0.025, -0.32);
   g.add(barrel, rec, mag, stock, sight, grip, brake);

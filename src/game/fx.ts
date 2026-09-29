@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isLoDevice, isStruggling } from "./textures";
 
 type Particle = {
   x: number;
@@ -18,13 +19,11 @@ type Particle = {
   g: number;
   b: number;
   pixel: boolean;
+  arc: boolean;
 };
 
-const lo =
-  typeof window !== "undefined" &&
-  (window.innerWidth < 720 || (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false));
-
-const MAX = lo ? 120 : 240;
+const lo = isLoDevice();
+const MAX = lo ? 80 : 160;
 
 function glowMap(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -59,7 +58,7 @@ export class ParticleField {
   private points: THREE.Points;
   private tex: THREE.CanvasTexture;
   private uScale: THREE.IUniform<number>;
-  private mul = lo ? 0.5 : 1;
+  private mul = lo ? 0.42 : 0.85;
   private ash = 0;
   private hex = new THREE.Color();
   private chunks: Array<{ mesh: THREE.Mesh; vx: number; vy: number; vz: number; life: number }> = [];
@@ -97,6 +96,7 @@ export class ParticleField {
         g: 1,
         b: 1,
         pixel: false,
+        arc: false,
       });
       this.free.push(i);
     }
@@ -139,6 +139,16 @@ export class ParticleField {
         varying vec3 vColor;
         varying float vPixel;
         void main() {
+          if (vPixel > 1.5) {
+            vec2 q = gl_PointCoord - 0.5;
+            float d = length(q);
+            float core = smoothstep(0.2, 0.0, d);
+            float ring = smoothstep(0.5, 0.34, d) * smoothstep(0.16, 0.28, d);
+            float a = core + ring * 0.9;
+            if (a < 0.04) discard;
+            gl_FragColor = vec4(vColor, 1.0) * a;
+            return;
+          }
           if (vPixel > 0.5) {
             vec2 p = gl_PointCoord;
             float square = step(0.1, p.x) * step(0.1, p.y) * step(p.x, 0.9) * step(p.y, 0.9);
@@ -187,6 +197,7 @@ export class ParticleField {
       bounce?: number;
       up?: number;
       pixel?: boolean;
+      arc?: boolean;
     } = {},
   ) {
     const i = this.free.pop();
@@ -216,6 +227,7 @@ export class ParticleField {
     p.grav = opts.grav ?? 11;
     p.bounce = opts.bounce ?? 0;
     p.pixel = opts.pixel ?? false;
+    p.arc = opts.arc ?? false;
     this.hex.setHex(color);
     p.r = this.hex.r;
     p.g = this.hex.g;
@@ -443,6 +455,24 @@ export class ParticleField {
     }
   }
 
+  burnSmoke(x: number, y: number, z: number) {
+    for (let i = 0; i < this.n(9); i++) {
+      this.emit(x, y + 0.15, z, 0x6a5c52, {
+        speed: 0.7,
+        life: 0.9,
+        size: 0.58,
+        grow: 1.6,
+        grav: -2.4,
+        up: 2.6,
+        drag: 1.5,
+        cone: 0.95,
+      });
+    }
+    for (let i = 0; i < this.n(5); i++) {
+      this.emit(x, y + 0.08, z, 0xff6a28, { speed: 1.3, life: 0.28, size: 0.2, up: 1.8, grav: 2, cone: 1.05 });
+    }
+  }
+
   pad(x: number, y: number, z: number) {
     this.emit(x, y, z, 0x7ff5e4, { speed: 0.08, life: 0.16, size: 0.6, grow: -1.2, grav: 0, up: 0 });
     for (let i = 0; i < this.n(8); i++) {
@@ -509,6 +539,68 @@ export class ParticleField {
       grav: -0.15,
       drag: 1.8,
     });
+  }
+
+  ionMuzzle(x: number, y: number, z: number, dx: number, dy: number, dz: number) {
+    this.emit(x, y, z, 0xf4fbff, { speed: 0.02, life: 0.05, size: 0.28, grow: -3, grav: 0, up: 0, arc: true });
+    this.emit(x + dx * 0.2, y + dy * 0.2, z + dz * 0.2, 0x7eb6ff, {
+      vx: dx * 6,
+      vy: dy * 6,
+      vz: dz * 6,
+      life: 0.07,
+      size: 0.12,
+      grav: 0,
+      drag: 2,
+      arc: true,
+    });
+  }
+
+  ionTrail(x: number, y: number, z: number, vx: number, vy: number, vz: number) {
+    if (this.alive.length > MAX * 0.72) return;
+    const len = Math.hypot(vx, vy, vz) || 1;
+    const bx = -vx / len;
+    const by = -vy / len;
+    const bz = -vz / len;
+    this.emit(x, y, z, 0xf7fbff, { speed: 0.01, life: 0.05, size: 0.2, grow: -2.4, grav: 0, up: 0, arc: true });
+    this.emit(x + bx * 0.32, y + by * 0.32, z + bz * 0.32, 0x5aa8ff, {
+      vx: bx * 1.4,
+      vy: by * 1.4,
+      vz: bz * 1.4,
+      life: 0.12,
+      size: 0.1,
+      grav: 0,
+      drag: 3,
+      arc: true,
+    });
+    this.emit(x + bx * 0.62, y + by * 0.62, z + bz * 0.62, 0xc9a6ff, {
+      vx: bx * 0.5,
+      vy: by * 0.5,
+      vz: bz * 0.5,
+      life: 0.16,
+      size: 0.07,
+      grav: 0,
+      drag: 2.2,
+      arc: true,
+    });
+  }
+
+  ionPop(x: number, y: number, z: number) {
+    this.emit(x, y, z, 0xf4fbff, { speed: 0.02, life: 0.07, size: 0.42, grow: -3.6, grav: 0, up: 0, arc: true });
+    this.emit(x, y, z, 0x7eb6ff, { speed: 0.04, life: 0.14, size: 0.28, grow: -1.4, grav: 0, up: 0, arc: true });
+    const n = this.n(8);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      this.emit(x, y, z, i % 2 ? 0xc9a6ff : 0x5aa8ff, {
+        vx: Math.cos(a) * 6.5,
+        vy: 0.15,
+        vz: Math.sin(a) * 6.5,
+        life: 0.14,
+        size: 0.07,
+        grav: 0,
+        drag: 2.4,
+        arc: true,
+      });
+    }
   }
 
   bulletTrail(x: number, y: number, z: number, color: number, hot = false) {
@@ -591,9 +683,9 @@ export class ParticleField {
 
   update(_dt: number, _camera?: THREE.Camera) {
     const dt = _dt;
-    this.uScale.value = 540 * Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1.5);
+    this.uScale.value = 420 * Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 1);
     this.ash += dt;
-    if (this.ash > 0.2 && this.alive.length < 28) {
+    if (!lo && !isStruggling() && this.ash > 0.2 && this.alive.length < 22) {
       this.ash = 0;
       const a = Math.random() * Math.PI * 2;
       const r = 8 + Math.random() * 34;
@@ -663,7 +755,11 @@ export class ParticleField {
       pos[o] = p.x;
       pos[o + 1] = p.y;
       pos[o + 2] = p.z;
-      if (p.pixel) {
+      if (p.arc) {
+        col[o] = p.r * (0.55 + 0.45 * fade);
+        col[o + 1] = p.g * (0.55 + 0.45 * fade);
+        col[o + 2] = p.b * (0.55 + 0.45 * fade);
+      } else if (p.pixel) {
         col[o] = p.r * (0.45 + 0.55 * fade);
         col[o + 1] = p.g * (0.45 + 0.55 * fade);
         col[o + 2] = p.b * (0.45 + 0.55 * fade);
@@ -673,7 +769,7 @@ export class ParticleField {
         col[o + 2] = p.b * (0.12 + 0.5 * fade);
       }
       siz[w] = Math.max(0.02, p.size + p.grow * (1 - t) * p.size);
-      pix[w] = p.pixel ? 1 : 0;
+      pix[w] = p.arc ? 2 : p.pixel ? 1 : 0;
       alive[w++] = i;
     }
     alive.length = w;

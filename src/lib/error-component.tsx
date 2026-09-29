@@ -1,5 +1,7 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
+import { useEffect } from "react";
+import { debugSpool } from "@/lib/debug-spool";
 
 const FALLBACK_MESSAGE = "An unexpected error occurred. Try reloading the page.";
 
@@ -10,6 +12,9 @@ function errorMessage(error: unknown): string {
 }
 
 export function AppErrorComponent({ error }: ErrorComponentProps) {
+  useEffect(() => {
+    debugSpool.error("router", error);
+  }, [error]);
   return (
     <main
       className={

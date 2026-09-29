@@ -72,6 +72,22 @@ export default async function grokPwaMiddleware(
   const path = event.url.pathname;
   const urlWithQuery = path + event.url.search;
 
+  if (
+    path.startsWith("/assets/") ||
+    path.startsWith("/textures/") ||
+    path.startsWith("/media/") ||
+    path.startsWith("/models/")
+  ) {
+    const result = await next();
+    if (!(result instanceof Response)) return result;
+    const headers = new Headers(result.headers);
+    headers.set(
+      "cache-control",
+      path.startsWith("/assets/") ? "public, max-age=604800, immutable" : "public, max-age=86400",
+    );
+    return new Response(result.body, { status: result.status, statusText: result.statusText, headers });
+  }
+
   if (path === "/__grok/manifest.webmanifest" || path === "/__grok/manifest.json") {
     return new Response(renderWebManifest(requestHost(event)), {
       headers: {

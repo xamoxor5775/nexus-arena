@@ -1,0 +1,7 @@
+Bot models (optimised: webp textures + meshopt geometry). All CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/).
+
+agent-cowboy-v1.glb  "Agent47 (cowboy suit)" by Veterock - https://sketchfab.com/3d-models/agent47-cowboy-suit-fa596d4fcc1448aaa6625dee07f47b37
+                     (modified: auto-rigged with a simple humanoid skeleton, simplified)
+venom-blue-v1.glb    "Venom Blue" by YE YE - https://sketchfab.com/3d-models/venom-blue-9659ead2f5ef4e3784590e8ff7d70594 (modified: simplified)
+cowgirl-v1.glb       "Female Cowgirl V4" by Fadly.W - https://sketchfab.com/3d-models/female-cowgirl-v4-17950505a83d4c339fd276c6b3a8addc (modified: simplified)
+goku-v1.glb          "GOKU FORCE JUMP MODELO" by Joaoraiz457 - https://sketchfab.com/3d-models/goku-force-jump-modelo-e33472acdf044df7828db938905a1dc0 (modified: simplified)

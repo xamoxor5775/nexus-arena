@@ -1,11 +1,47 @@
 import * as THREE from "three";
+import type { ItemKind, WeaponId } from "./types";
 
 THREE.Cache.enabled = true;
 const loader = new THREE.TextureLoader();
 const texCache = new Map<string, THREE.Texture>();
 
-function loDevice() {
-  return typeof window !== "undefined" && (window.innerWidth < 720 || (navigator.hardwareConcurrency || 8) <= 4);
+export function isLoDevice() {
+  return typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 720 || (navigator.hardwareConcurrency || 8) <= 4);
+}
+
+let hitchEma = 16.6;
+export function noteGpuFrame(dt: number) {
+  hitchEma = hitchEma * 0.88 + Math.min(50, dt * 1000) * 0.12;
+}
+export function hitchMs() {
+  return hitchEma;
+}
+export function isStruggling() {
+  return hitchEma > 18.5;
+}
+
+export function skySphereGeo() {
+  const lo = isLoDevice();
+  return new THREE.SphereGeometry(240, lo ? 24 : 32, lo ? 16 : 20);
+}
+
+function downscaleTex(tex: THREE.Texture, maxEdge: number) {
+  const img = tex.image as { width?: number; height?: number } | undefined;
+  if (!img?.width || !img.height || typeof document === "undefined") return;
+  const edge = Math.max(img.width, img.height);
+  if (edge <= maxEdge) return;
+  const scale = maxEdge / edge;
+  const w = Math.max(64, Math.round(img.width * scale));
+  const h = Math.max(64, Math.round(img.height * scale));
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(img as CanvasImageSource, 0, 0, w, h);
+  tex.image = c;
+  tex.needsUpdate = true;
 }
 
 function configure(tex: THREE.Texture, wrap: THREE.Wrapping, repeatX: number, repeatY: number, aniso: number) {
@@ -28,8 +64,56 @@ function makeCanvas(size: number): HTMLCanvasElement | null {
 
 function fromCanvas(c: HTMLCanvasElement, repeatX: number, repeatY: number): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(c);
-  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, loDevice() ? 2 : 4);
+  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, isLoDevice() ? 1 : 4);
   tex.needsUpdate = true;
+  return tex;
+}
+
+/** Agua cian con ondas: se desplaza en el Laberinto. */
+export function mazeWaterTex(repeatX = 3.2, repeatY = 3.2): THREE.Texture {
+  const key = `proc:maze-water:${repeatX}:${repeatY}`;
+  const hit = texCache.get(key);
+  if (hit) return hit;
+  const size = isLoDevice() ? 128 : 256;
+  const c = makeCanvas(size);
+  if (!c) {
+    const tex = new THREE.Texture();
+    texCache.set(key, tex);
+    return tex;
+  }
+  const ctx = c.getContext("2d")!;
+  const base = ctx.createLinearGradient(0, 0, size, size);
+  base.addColorStop(0, "#063a48");
+  base.addColorStop(0.45, "#0a6a7a");
+  base.addColorStop(1, "#042830");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 9; i++) {
+    const cx = (i * 73 + 28) % size;
+    const cy = (i * 51 + 40) % size;
+    const rad = 18 + (i % 4) * 10;
+    const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, rad);
+    g.addColorStop(0, "rgba(180, 255, 255, 0.55)");
+    g.addColorStop(0.35, "rgba(40, 210, 230, 0.22)");
+    g.addColorStop(1, "rgba(10, 80, 90, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let r = 0; r < 7; r++) {
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(170, 255, 255, ${0.18 + (r % 3) * 0.06})`;
+    ctx.lineWidth = 2;
+    const rad = 16 + r * 16;
+    ctx.arc(size * 0.5, size * 0.5, rad, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc((r * 37 + 20) % size, (r * 53 + 48) % size, 10 + r * 3, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  const tex = fromCanvas(c, repeatX, repeatY);
+  texCache.set(key, tex);
   return tex;
 }
 
@@ -38,7 +122,7 @@ export function laveCrackTex(repeatX = 12, repeatY = 9): THREE.Texture {
   const key = `proc:lave-cracks:${repeatX}:${repeatY}`;
   const hit = texCache.get(key);
   if (hit) return hit;
-  const size = 256;
+  const size = isLoDevice() ? 128 : 256;
   const c = makeCanvas(size);
   if (!c) {
     const tex = new THREE.Texture();
@@ -112,7 +196,7 @@ export function gunMetalTex(repeatX = 2.4, repeatY = 1.6): THREE.Texture {
   const key = `proc:gunmetal:${repeatX}:${repeatY}`;
   const hit = texCache.get(key);
   if (hit) return hit;
-  const size = 256;
+  const size = isLoDevice() ? 128 : 256;
   const c = makeCanvas(size);
   if (!c) {
     const tex = new THREE.Texture();
@@ -155,7 +239,7 @@ export function polymerTex(repeatX = 1.8, repeatY = 1.8): THREE.Texture {
   const key = `proc:polymer:${repeatX}:${repeatY}`;
   const hit = texCache.get(key);
   if (hit) return hit;
-  const size = 256;
+  const size = isLoDevice() ? 128 : 256;
   const c = makeCanvas(size);
   if (!c) {
     const tex = new THREE.Texture();
@@ -248,15 +332,155 @@ export function loadTex(url: string, repeatX: number, repeatY = repeatX): THREE.
   const key = `${url}:${repeatX}:${repeatY}`;
   const hit = texCache.get(key);
   if (hit) return hit;
-  const tex = loader.load(url);
-  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, loDevice() ? 2 : 4);
+  const tex = loader.load(url, (ready) => {
+    if (isLoDevice()) {
+      downscaleTex(ready, 1024);
+      ready.anisotropy = 1;
+    }
+  });
+  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, isLoDevice() ? 1 : 4);
   texCache.set(key, tex);
   return tex;
 }
 
+/** Paneles PBR por arma: body = skin propia, el resto son placas de acento del mismo set. */
+export type WeaponSlot = "body" | "dark" | "chrome" | "grip";
+const WEAPON_PLATE: Record<WeaponId, Record<WeaponSlot, string>> = {
+  pulse: {
+    body: "pulse-surface-v2.webp",
+    dark: "panel-octagon.jpg",
+    chrome: "circuit-cyan.jpg",
+    grip: "ammo-gold.jpg",
+  },
+  scatter: {
+    body: "scatter-surface-v2.webp",
+    dark: "hazard-red.jpg",
+    chrome: "missiles.jpg",
+    grip: "hazard-red.jpg",
+  },
+  torpedo: {
+    body: "torpedo-surface-v2.webp",
+    dark: "ember-core.jpg",
+    chrome: "missiles.jpg",
+    grip: "ammo-gold.jpg",
+  },
+  lance: {
+    body: "lance-surface-v2.webp",
+    dark: "neon-violet.jpg",
+    chrome: "bars-teal.jpg",
+    grip: "pixel-ion.jpg",
+  },
+  ion: {
+    body: "ion-surface-v2.webp",
+    dark: "pixel-ion.jpg",
+    chrome: "bars-teal.jpg",
+    grip: "panel-cyan.jpg",
+  },
+  fauces: {
+    body: "fauces-surface-v1.webp",
+    dark: "fauces-dark-v1.webp",
+    chrome: "fauces-chrome-v1.webp",
+    grip: "fauces-grip-v1.webp",
+  },
+  knife: {
+    body: "knife-surface-v1.webp",
+    dark: "fauces-dark-v1.webp",
+    chrome: "knife-surface-v1.webp",
+    grip: "fauces-grip-v1.webp",
+  },
+  bate: {
+    body: "bat-surface-v1.webp",
+    dark: "fauces-dark-v1.webp",
+    chrome: "bat-surface-v1.webp",
+    grip: "fauces-grip-v1.webp",
+  },
+  martillo: {
+    body: "hammer-surface-v1.webp",
+    dark: "fauces-dark-v1.webp",
+    chrome: "hammer-surface-v1.webp",
+    grip: "fauces-grip-v1.webp",
+  },
+};
+
+export function weaponPlateFile(id: WeaponId, slot: WeaponSlot = "body") {
+  return WEAPON_PLATE[id][slot];
+}
+
+export function loadWeaponTex(id: WeaponId, repeatX = 2.2, repeatY = 2.2): THREE.Texture {
+  return loadTex(`/textures/weapons/${weaponPlateFile(id, "body")}`, repeatX, repeatY);
+}
+
+const BOT_FACE_COUNT = 4;
+let botFaceBag: number[] = [];
+
+export function takeBotFace(): number {
+  if (!botFaceBag.length) {
+    botFaceBag = [0, 1, 2, 3];
+    for (let i = botFaceBag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const a = botFaceBag[i]!;
+      botFaceBag[i] = botFaceBag[j]!;
+      botFaceBag[j] = a;
+    }
+  }
+  return botFaceBag.pop()!;
+}
+
+export function botFaceTex(faceId: number): THREE.Texture {
+  const n = ((faceId % BOT_FACE_COUNT) + BOT_FACE_COUNT) % BOT_FACE_COUNT;
+  return loadIconTex(`/textures/bots/cara-${n + 1}.jpg`);
+}
+
+export function loadSummitTex(
+  kind: "grass" | "red-bark" | "red-canopy",
+  repeatX = 1,
+  repeatY = repeatX,
+): THREE.Texture {
+  if (isLoDevice()) return loadTex(`/textures/summit/${kind}-mobile.webp`, repeatX, repeatY);
+  if (kind === "grass") return loadTex(`/textures/summit/${kind}-2k.webp`, repeatX, repeatY);
+  return loadTex(`/textures/summit/${kind}.jpg`, repeatX, repeatY);
+}
+
+export function smokePuffTex(): THREE.Texture {
+  const key = "proc:smoke-puff";
+  const hit = texCache.get(key);
+  if (hit) return hit;
+  const size = 64;
+  const c = makeCanvas(size);
+  if (!c) {
+    const tex = new THREE.Texture();
+    texCache.set(key, tex);
+    return tex;
+  }
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+  g.addColorStop(0, "rgba(255, 210, 160, 0.55)");
+  g.addColorStop(0.28, "rgba(90, 70, 60, 0.42)");
+  g.addColorStop(0.62, "rgba(28, 22, 20, 0.22)");
+  g.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = fromCanvas(c, 1, 1);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  texCache.set(key, tex);
+  return tex;
+}
+
+export type PozoSurfaceKind = "industrial-teal" | "volcanic-lava" | "alien-forest";
+
+export function loadPozoSurface(kind: PozoSurfaceKind, repeatX = 3, repeatY = repeatX): THREE.Texture {
+  const file = isLoDevice()
+    ? `/textures/surfaces/floor-${kind}-mobile.webp`
+    : `/textures/surfaces/floor-${kind}-v1.webp`;
+  return loadTex(file, repeatX, repeatY);
+}
+
 export function loadArenaMaps() {
+  const mobile = isLoDevice();
+  const tile = mobile ? 8 : 16;
   return {
-    floor: loadTex("/textures/floor.jpg", 18, 18),
+    floor: loadTex("/textures/surfaces/pozo-floor.jpg", tile, tile),
+    wall: loadTex("/textures/surfaces/pozo-walls.jpg", mobile ? 6 : 12, mobile ? 2 : 3),
     plate: loadTex("/textures/plate.jpg", 5, 5),
     beam: loadTex("/textures/beam.jpg", 1.1, 2.4),
     pipes: loadTex("/textures/pipes.jpg", 1.6, 1.4),
@@ -269,19 +493,47 @@ export function loadArenaMaps() {
   };
 }
 
-export function loadSkyTex(url: string): THREE.Texture {
-  const hit = texCache.get(url);
+export function loadSkyTex(url: string, cache = true): THREE.Texture {
+  const hit = cache ? texCache.get(url) : undefined;
   if (hit) return hit;
-  const tex = loader.load(url);
+  const tex = loader.load(url, (ready) => {
+    if (isLoDevice()) {
+      downscaleTex(ready, 1024);
+      ready.anisotropy = 1;
+    }
+  });
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 1;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = isLoDevice() ? 1 : 4;
+  tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.minFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  texCache.set(url, tex);
+  tex.generateMipmaps = true;
+  if (cache) texCache.set(url, tex);
   return tex;
+}
+
+/** Un solo panorama residente: 4K en escritorio (60 fps) y 2K en móviles. */
+const SPACE_SKY_FILE: Record<"pozo" | "cumbre" | "lave" | "luna", string> = {
+  pozo: "sapphire",
+  cumbre: "ocean-cumbre",
+  lave: "ruby",
+  luna: "sapphire",
+};
+let activeSpaceSky: { url: string; texture: THREE.Texture } | null = null;
+
+export function loadSpaceSky(kind: "pozo" | "cumbre" | "lave" | "luna"): THREE.Texture {
+  const size = isLoDevice() ? "mobile" : "4k";
+  const url = `/textures/space/space-${SPACE_SKY_FILE[kind]}-${size}.webp`;
+  if (activeSpaceSky?.url === url) return activeSpaceSky.texture;
+  if (activeSpaceSky) {
+    activeSpaceSky.texture.dispose();
+    texCache.delete(activeSpaceSky.url);
+    THREE.Cache.remove(activeSpaceSky.url);
+  }
+  const texture = loadSkyTex(url);
+  activeSpaceSky = { url, texture };
+  return texture;
 }
 
 export function padTexture(): THREE.CanvasTexture {
@@ -316,54 +568,32 @@ export function padTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** Texturas pequeñas, reutilizadas por pickup: detalle visible sin descargar assets ni usar shaders extra. */
-export function pickupTexture(kind: "health" | "rush"): THREE.Texture {
-  const key = `proc:pickup:${kind}`;
-  const hit = texCache.get(key);
+/** Icono de pickup o HUD: clamp para que el arte no se tilee en la placa. */
+export function loadIconTex(url: string): THREE.Texture {
+  const hit = texCache.get(url);
   if (hit) return hit;
-  const size = 128;
-  const c = makeCanvas(size);
-  if (!c) {
-    const tex = new THREE.Texture();
-    texCache.set(key, tex);
-    return tex;
-  }
-  const ctx = c.getContext("2d")!;
-  ctx.fillStyle = kind === "health" ? "#8bbfa4" : "#63d6dc";
-  ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = kind === "health" ? "#315746" : "#155d68";
-  for (let y = 0; y < size; y += 18) {
-    for (let x = 0; x < size; x += 18) {
-      ctx.fillRect(x + 2, y + 2, 14, 14);
-      ctx.fillStyle = kind === "health" ? "#6f9c84" : "#3299a5";
-      ctx.fillRect(x + 4, y + 4, 10, 3);
-      ctx.fillStyle = kind === "health" ? "#315746" : "#155d68";
-    }
-  }
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = "#f5fff6";
-  if (kind === "health") {
-    ctx.fillRect(53, 20, 22, 88);
-    ctx.fillRect(20, 53, 88, 22);
-  } else {
-    for (let y = 13; y < 116; y += 28) {
-      ctx.beginPath();
-      ctx.moveTo(22, y);
-      ctx.lineTo(89, y);
-      ctx.lineTo(75, y + 12);
-      ctx.lineTo(105, y + 12);
-      ctx.lineTo(70, y + 28);
-      ctx.lineTo(18, y + 28);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-  ctx.globalAlpha = 1;
-  fillNoise(ctx, size, 12);
-  const tex = fromCanvas(c, 1, 1);
-  tex.anisotropy = loDevice() ? 2 : 4;
-  texCache.set(key, tex);
+  const tex = loader.load(url);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = isLoDevice() ? 1 : 4;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  texCache.set(url, tex);
   return tex;
+}
+
+/** Mapas compactos para diferenciar cada pickup flotante sin compartir un icono genérico. */
+export function pickupTexture(kind: Exclude<ItemKind, "armor" | "ammo">): THREE.Texture {
+  return loadIconTex(`/textures/pickups/${kind}-icon.jpg`);
+}
+
+export function jumpPadTex(): THREE.Texture {
+  return loadIconTex("/textures/pads/super-salto.jpg");
+}
+
+export function portalTex(): THREE.Texture {
+  return loadIconTex("/textures/portal-flotante.jpg");
 }
 
 /** Etiqueta pixelada para cajas de suministros: reutilizada entre pickups sin nuevos archivos descargables. */
@@ -413,7 +643,7 @@ export function supplyCrateTexture(kind: "armor" | "ammo" | "weapon"): THREE.Tex
   }
   fillNoise(ctx, size, 10);
   const tex = fromCanvas(c, 1, 1);
-  tex.anisotropy = loDevice() ? 2 : 4;
+  tex.anisotropy = isLoDevice() ? 1 : 4;
   texCache.set(key, tex);
   return tex;
 }

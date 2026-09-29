@@ -97,6 +97,46 @@ export class BoxBatch {
   }
 }
 
+/** Cubiertas horizontales: UV en metros de mundo, sin merge de Planes (el dispose compartía buffers). */
+export function stampDecks(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number; w: number; d: number }>,
+  metersPerTile = 2.15,
+): { mesh: THREE.Mesh; geo: THREE.BufferGeometry } {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let base = 0;
+  for (const it of items) {
+    const x0 = it.x - it.w * 0.5;
+    const x1 = it.x + it.w * 0.5;
+    const z0 = it.z - it.d * 0.5;
+    const z1 = it.z + it.d * 0.5;
+    const y = it.y;
+    positions.push(x0, y, z0, x0, y, z1, x1, y, z1, x1, y, z0);
+    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+    uvs.push(x0 / metersPerTile, z0 / metersPerTile, x0 / metersPerTile, z1 / metersPerTile, x1 / metersPerTile, z1 / metersPerTile, x1 / metersPerTile, z0 / metersPerTile);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    base += 4;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = false;
+  mesh.castShadow = false;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
+  parent.add(mesh);
+  return { mesh, geo };
+}
+
 export function instancePlanes(
   parent: THREE.Object3D,
   mat: THREE.Material,
@@ -108,6 +148,21 @@ export function instancePlanes(
     dummy.position.set(it.x, it.y, it.z);
     dummy.rotation.set(0, it.ry, 0);
     dummy.scale.set(it.s, it.s, 1);
+  });
+  return { mesh, geo };
+}
+
+export function instanceDiscs(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  radius: number,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.CircleGeometry(radius, 24);
+  geo.rotateX(-Math.PI / 2);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
   });
   return { mesh, geo };
 }
@@ -141,6 +196,23 @@ export function instanceCones(
   const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
     const it = items[i]!;
     dummy.position.set(it.x, it.y, it.z);
+  });
+  return { mesh, geo };
+}
+
+/** Copas de follaje: UV esféricas para que se lea la textura de hojas. */
+export function instanceIcosahedrons(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  radius: number,
+  scaleY = 1.18,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.IcosahedronGeometry(radius, 1);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
+    dummy.scale.set(1, scaleY, 1);
   });
   return { mesh, geo };
 }

@@ -1,10 +1,11 @@
 import * as THREE from "three";
+import { ROUND_SECONDS } from "./constants";
 import { boxAt } from "./collision";
 import type { AABB, ItemPad, JumpPad, Spawn, TeleportGate } from "./types";
 import { createArenaLights } from "./lighting";
-import { BoxBatch, instanceCones, instanceCylinders } from "./instancing";
-import { loadSkyTex, loadTex } from "./textures";
-import type { ArenaData } from "./arena";
+import { BoxBatch, instanceCones, instanceCylinders, instanceIcosahedrons, stampDecks } from "./instancing";
+import { isLoDevice, loadSkyTex, loadSummitTex, loadTex, portalTex, skySphereGeo } from "./textures";
+import { stampJumpPads, type ArenaData } from "./arena";
 
 function addBox(
   batch: BoxBatch,
@@ -23,15 +24,15 @@ function addBox(
 }
 
 /**
- * El musgo es la tapa de la isla: la superficie de caminado queda exactamente en `top`.
- * `rockFor`/`grassFor` eligen el material según el ancho porque BatchedMesh normaliza las UV
- * por cara: sin eso, una isla de 20 m y una de 4 m mostrarían la piedra al mismo tamaño.
+ * Cuerpo de roca + cubierta de musgo en un plano aparte.
+ * BatchedMesh escala un cubo unitario y deja las UV en 0–1: el césped en esa tapa
+ * se estiraba en islas rectangulares y se manchaba en los cantos de 16 cm.
  */
 function slab(
   batch: BoxBatch,
   solids: AABB[],
   rockFor: (size: number) => THREE.Material,
-  grassFor: (size: number) => THREE.Material,
+  decks: Array<{ x: number; y: number; z: number; w: number; d: number }>,
   x: number,
   top: number,
   z: number,
@@ -39,17 +40,17 @@ function slab(
   d: number,
 ) {
   const thick = 1.15;
-  const cap = 0.16;
   const size = (w + d) / 2;
   solids.push(boxAt(x, top - thick, z, w, thick, d));
-  addBox(batch, solids, rockFor(size), x, top - thick, z, w, thick - cap, d, false);
-  addBox(batch, solids, grassFor(size), x, top - cap, z, w, cap, d, false);
+  addBox(batch, solids, rockFor(size), x, top - thick, z, w, thick - 0.08, d, false);
+  decks.push({ x, y: top + 0.02, z, w, d });
 }
 
 function stairRun(
   batch: BoxBatch,
   solids: AABB[],
   mat: THREE.Material,
+  decks: Array<{ x: number; y: number; z: number; w: number; d: number }>,
   x0: number,
   z0: number,
   y0: number,
@@ -66,17 +67,12 @@ function stairRun(
   for (let i = 0; i < n; i++) {
     const t = (i + 0.5) / n;
     const top = y0 + (i + 1) * h;
-    addBox(
-      batch,
-      solids,
-      mat,
-      x0 + (x1 - x0) * t,
-      top - h,
-      z0 + (z1 - z0) * t,
-      alongX ? span : width,
-      h,
-      alongX ? width : span,
-    );
+    const x = x0 + (x1 - x0) * t;
+    const z = z0 + (z1 - z0) * t;
+    const w = alongX ? span : width;
+    const d = alongX ? width : span;
+    addBox(batch, solids, mat, x, top - h, z, w, h, d);
+    decks.push({ x, y: top + 0.02, z, w, d });
   }
 }
 
@@ -92,29 +88,20 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   const geos: THREE.BufferGeometry[] = [];
   const batch = new BoxBatch();
 
-  const barkTex = loadTex("/textures/summit-bark.jpg", 1.4, 2.8);
-  const canopyTex = loadTex("/textures/summit-canopy.jpg", 2.2, 2.2);
+  const barkTex = loadSummitTex("red-bark", 2.2, 3.6);
+  const canopyTex = loadSummitTex("red-canopy", 3.6, 3.6);
   const makeRock = (tiles: number) => {
     const m = new THREE.MeshStandardMaterial({
       map: loadTex("/textures/summit-basalt-moss.jpg", tiles, Math.max(1, Math.round(tiles * 0.45))),
-      color: 0xd8dce0,
+      color: 0xffffff,
       roughness: 0.92,
       metalness: 0.04,
     });
     mats.push(m);
     return m;
   };
-  const makeGrass = (tiles: number) => {
-    const m = new THREE.MeshLambertMaterial({
-      map: loadTex("/textures/summit-moss-ground.jpg", tiles, tiles),
-      color: 0xe6eed8,
-    });
-    mats.push(m);
-    return m;
-  };
   const rockTiers = new Map<number, THREE.Material>();
-  const grassTiers = new Map<number, THREE.Material>();
-  // Un material por tramo de tamaño: la piedra mide ~2.6 m por baldosa y el musgo ~2 m.
+  // Un material por tramo de tamaño: BatchedMesh deja las UV en 0–1 por cara.
   const rockFor = (size: number) => {
     const tiles = Math.max(1, Math.round(size / 2.6));
     let m = rockTiers.get(tiles);
@@ -124,55 +111,58 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
     }
     return m;
   };
-  const grassFor = (size: number) => {
-    const tiles = Math.max(2, Math.round(size / 2));
-    let m = grassTiers.get(tiles);
-    if (!m) {
-      m = makeGrass(tiles);
-      grassTiers.set(tiles, m);
-    }
-    return m;
-  };
+  const grassMat = new THREE.MeshLambertMaterial({
+    map: loadTex("/textures/summit/piso-cumbre.webp", 1, 1),
+    color: 0xffffff,
+    emissive: 0x1e3a12,
+    emissiveIntensity: 0.12,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  mats.push(grassMat);
+  const decks: Array<{ x: number; y: number; z: number; w: number; d: number }> = [];
   const rock = makeRock(3);
   const trunkMat = new THREE.MeshLambertMaterial({
     map: barkTex,
-    color: 0xc4a078,
+    color: 0xffffff,
+    emissive: 0x4a0810,
+    emissiveMap: barkTex,
+    emissiveIntensity: 0.2,
+    toneMapped: false,
   });
-  const leafMat = new THREE.MeshStandardMaterial({
+  const leafMat = new THREE.MeshLambertMaterial({
     map: canopyTex,
-    color: 0xff6478,
-    emissive: 0x8f1128,
+    color: 0xffffff,
+    emissive: 0x5a0814,
     emissiveMap: canopyTex,
-    emissiveIntensity: 0.82,
-    roughness: 0.28,
-    metalness: 0.32,
-    envMapIntensity: 0.5,
+    emissiveIntensity: 0.26,
+    toneMapped: false,
   });
-  const leafTipMat = new THREE.MeshStandardMaterial({
+  const leafTipMat = new THREE.MeshLambertMaterial({
     map: canopyTex,
-    color: 0xffb7c2,
-    emissive: 0xe83052,
+    color: 0xffd4da,
+    emissive: 0x8a1428,
     emissiveMap: canopyTex,
-    emissiveIntensity: 1.08,
-    roughness: 0.2,
-    metalness: 0.46,
-    envMapIntensity: 0.7,
+    emissiveIntensity: 0.38,
+    toneMapped: false,
   });
   const padMat = new THREE.MeshLambertMaterial({
     color: 0x7ee8ff,
     emissive: 0x2ee0c8,
     emissiveIntensity: 0.7,
   });
-  const gateMat = new THREE.MeshBasicMaterial({ color: 0x9aff72, transparent: true, opacity: 0.9, toneMapped: false });
-  const gateBaseMat = new THREE.MeshLambertMaterial({ color: 0x183d2d, emissive: 0x4dff93, emissiveIntensity: 0.72 });
+  const gateMat = new THREE.MeshBasicMaterial({ color: 0xb07cff, transparent: true, opacity: 0.9, toneMapped: false });
+  const gateBaseMat = new THREE.MeshLambertMaterial({ color: 0x2a1848, emissive: 0x7a3cff, emissiveIntensity: 0.72 });
+  const portalMap = portalTex();
   const gateCoreMat = new THREE.MeshBasicMaterial({
-    color: 0xb9ff9b,
-    transparent: true,
-    opacity: 0.34,
+    map: portalMap,
+    color: 0xffffff,
     side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
     depthWrite: false,
     toneMapped: false,
+    fog: false,
   });
   const gatePillarMat = new THREE.MeshLambertMaterial({ color: 0x234e42, emissive: 0x2bbf72, emissiveIntensity: 0.9 });
   const treeCoreMat = new THREE.MeshBasicMaterial({ color: 0xffc0c8, transparent: true, opacity: 0.94, toneMapped: false });
@@ -197,34 +187,47 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
       ember: pulse(0xff7a32),
     },
     renderer,
-    "summit",
+    "summit-cycle",
   );
 
-  slab(batch, solids, rockFor, grassFor, 0, 0, 0, 20, 20);
-  slab(batch, solids, rockFor, grassFor, 0, 4.4, 0, 11, 11);
-  slab(batch, solids, rockFor, grassFor, 0, 8, 0, 6.4, 6.4);
-  slab(batch, solids, rockFor, grassFor, 0, 11.2, 0, 3.8, 3.8);
+  slab(batch, solids, rockFor, decks, 0, 0, 0, 20, 20);
+  slab(batch, solids, rockFor, decks, 0, 4.4, 0, 11, 11);
+  slab(batch, solids, rockFor, decks, 0, 8, 0, 6.4, 6.4);
+  slab(batch, solids, rockFor, decks, 0, 11.2, 0, 3.8, 3.8);
 
-  stairRun(batch, solids, rock, 8.2, 6.2, 0, 4.4, 4.6, 4.4, 2.4);
-  stairRun(batch, solids, rock, -3.6, -4.6, 4.4, -3.6, -2.2, 8, 2.2);
-  stairRun(batch, solids, rock, 1.4, 2.2, 8, 1.4, 1.1, 11.2, 2);
+  stairRun(batch, solids, rock, decks, 8.2, 6.2, 0, 4.4, 4.6, 4.4, 2.4);
+  stairRun(batch, solids, rock, decks, -3.6, -4.6, 4.4, -3.6, -2.2, 8, 2.2);
+  stairRun(batch, solids, rock, decks, 1.4, 2.2, 8, 1.4, 1.1, 11.2, 2);
 
-  slab(batch, solids, rockFor, grassFor, -16, 2.2, -13, 7.2, 6);
-  stairRun(batch, solids, rock, -8.2, -7.4, 0, -13.4, -11.6, 2.2, 2.2);
+  slab(batch, solids, rockFor, decks, -16, 2.2, -13, 7.2, 6);
+  stairRun(batch, solids, rock, decks, -8.2, -7.4, 0, -13.4, -11.6, 2.2, 2.2);
 
-  slab(batch, solids, rockFor, grassFor, 12, 3.4, -14, 6.4, 5.6);
-  slab(batch, solids, rockFor, grassFor, -12, 5.2, 12, 6.4, 6.2);
-  stairRun(batch, solids, rock, -4.2, 4.2, 4.4, -10, 10.2, 5.2, 2.2);
-  slab(batch, solids, rockFor, grassFor, 0, 6.2, 14, 6, 5.2);
-  slab(batch, solids, rockFor, grassFor, -16, 1.6, 4, 5.2, 5);
+  slab(batch, solids, rockFor, decks, 12, 3.4, -14, 6.4, 5.6);
+  slab(batch, solids, rockFor, decks, -12, 5.2, 12, 6.4, 6.2);
+  stairRun(batch, solids, rock, decks, -4.2, 4.2, 4.4, -10, 10.2, 5.2, 2.2);
+  slab(batch, solids, rockFor, decks, 0, 6.2, 14, 6, 5.2);
+  slab(batch, solids, rockFor, decks, -16, 1.6, 4, 5.2, 5);
 
   // Archipiélago aéreo: plataformas más amplias para combatir y aterrizar sin caídas injustas.
-  slab(batch, solids, rockFor, grassFor, 25, 8, -18, 9.2, 8.2);
-  slab(batch, solids, rockFor, grassFor, 27, 11.2, 7, 8.8, 8);
-  slab(batch, solids, rockFor, grassFor, 9, 14.2, 25, 9, 8.2);
-  slab(batch, solids, rockFor, grassFor, -15, 12.2, 25, 8.8, 8);
-  slab(batch, solids, rockFor, grassFor, -29, 9.2, 4, 9, 8.2);
-  slab(batch, solids, rockFor, grassFor, -24, 13.4, -21, 8.8, 8);
+  slab(batch, solids, rockFor, decks, 25, 8, -18, 9.2, 8.2);
+  slab(batch, solids, rockFor, decks, 27, 11.2, 7, 8.8, 8);
+  slab(batch, solids, rockFor, decks, 9, 14.2, 25, 9, 8.2);
+  slab(batch, solids, rockFor, decks, -15, 12.2, 25, 8.8, 8);
+  slab(batch, solids, rockFor, decks, -29, 9.2, 4, 9, 8.2);
+  slab(batch, solids, rockFor, decks, -24, 13.4, -21, 8.8, 8);
+
+  const isle = (x: number, top: number, z: number, w: number, d: number) => {
+    slab(batch, solids, rockFor, decks, x, top, z, w, d);
+    slab(batch, solids, rockFor, decks, x + w * 0.38, top, z + d * 0.22, w * 0.52, d * 0.58);
+    slab(batch, solids, rockFor, decks, x - w * 0.3, top, z - d * 0.32, w * 0.46, d * 0.5);
+    addBox(batch, solids, rockFor((w + d) / 2), x, top - 1.45, z, w + 1.6, 0.5, d + 1.6, false);
+  };
+  isle(18, 6.8, -2, 8.2, 6.6);
+  isle(6, 7.2, -26, 7.6, 6.4);
+  isle(-6, 10.4, -26, 7.2, 6.2);
+  isle(18, 5.2, 16, 7.6, 6.4);
+  isle(-36, 7.4, -12, 7.2, 6.2);
+  isle(0, 9.8, 34, 8.4, 6.6);
 
   const mark = (x: number, y: number, z: number) => waypoints.push({ x, y, z });
   mark(0, 0, 0);
@@ -249,6 +252,12 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   mark(-15, 12.2, 25);
   mark(-29, 9.2, 4);
   mark(-24, 13.4, -21);
+  mark(18, 6.8, -2);
+  mark(6, 7.2, -26);
+  mark(-6, 10.4, -26);
+  mark(18, 5.2, 16);
+  mark(-36, 7.4, -12);
+  mark(0, 9.8, 34);
 
   const launch = (x: number, y: number, z: number, vx: number, vy: number, vz: number) => {
     pads.push({ aabb: boxAt(x, y - 0.05, z, 2.2, 1.15, 2.2), vx, vy, vz });
@@ -271,6 +280,28 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   }));
   const padMesh = instanceCylinders(group, padMat, padSpots, 1.05, 1.15, 0.16);
   geos.push(padMesh.geo);
+  stampJumpPads(group, mats, geos, padSpots.map((p) => ({ ...p, y: p.y + 0.1 })), 1.08);
+
+  const buttonMat = new THREE.MeshLambertMaterial({
+    color: 0xd8ff9a,
+    emissive: 0x4dff93,
+    emissiveIntensity: 1.15,
+  });
+  mats.push(buttonMat);
+  const buttonSpots: Array<{ x: number; y: number; z: number }> = [];
+  const press = (x: number, top: number, z: number, vx: number, vy: number, vz: number) => {
+    pads.push({ aabb: boxAt(x, top - 0.02, z, 1.7, 0.9, 1.7), vx, vy, vz, chute: true });
+    buttonSpots.push({ x, y: top + 0.05, z });
+  };
+  press(6.4, 0, 6.4, 14, 28, -4);
+  press(-5.5, 0, -7.5, -2, 28, -16);
+  press(-8.2, 0, 1.6, -16, 28, 2);
+  press(18, 6.8, -2, -2, 26, 16);
+  press(6, 7.2, -26, -8, 26, 12);
+  press(0, 9.8, 34, -8, 24, -14);
+  const buttonMesh = instanceCylinders(group, buttonMat, buttonSpots, 0.72, 0.86, 0.1, 14);
+  geos.push(buttonMesh.geo);
+  stampJumpPads(group, mats, geos, buttonSpots.map((p) => ({ ...p, y: p.y + 0.08 })), 0.78);
 
   const gateRingGeo = new THREE.TorusGeometry(0.72, 0.09, 8, 16);
   const gateArchGeo = new THREE.TorusGeometry(0.94, 0.055, 8, 18);
@@ -329,10 +360,10 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   const plant = (x: number, z: number, walk: number) => {
     const h = 1.85;
     trunks.push({ x, y: walk + h / 2, z });
-    lowerCrowns.push({ x, y: walk + h + 0.7, z });
-    middleCrowns.push({ x, y: walk + h + 1.5, z });
-    upperCrowns.push({ x, y: walk + h + 2.22, z });
-    crownTips.push({ x, y: walk + h + 2.92, z });
+    lowerCrowns.push({ x, y: walk + h + 0.82, z });
+    middleCrowns.push({ x, y: walk + h + 1.55, z });
+    upperCrowns.push({ x, y: walk + h + 2.18, z });
+    crownTips.push({ x, y: walk + h + 2.78, z });
     for (const [dx, dz] of [[0.65, 0.18], [-0.58, 0.38], [0.16, -0.68]] as const) {
       crownBranches.push({ x: x + dx, y: walk + h + 1.8, z: z + dz });
     }
@@ -344,11 +375,11 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   plant(4.8, -3.2, 0);
   plant(-2.4, -6.6, 0);
   const trunkMesh = instanceCylinders(group, trunkMat, trunks, 0.18, 0.28, 1.85, 18);
-  const lowerCrownMesh = instanceCones(group, leafMat, lowerCrowns, 1.3, 2.2, 16);
-  const middleCrownMesh = instanceCones(group, leafMat, middleCrowns, 1.02, 1.94, 16);
-  const upperCrownMesh = instanceCones(group, leafMat, upperCrowns, 0.74, 1.64, 16);
-  const tipMesh = instanceCones(group, leafTipMat, crownTips, 0.38, 1.18, 12);
-  const branchMesh = instanceCones(group, leafTipMat, crownBranches, 0.44, 1.04, 10);
+  const lowerCrownMesh = instanceIcosahedrons(group, leafMat, lowerCrowns, 1.18, 1.22);
+  const middleCrownMesh = instanceIcosahedrons(group, leafMat, middleCrowns, 0.92, 1.2);
+  const upperCrownMesh = instanceIcosahedrons(group, leafMat, upperCrowns, 0.68, 1.18);
+  const tipMesh = instanceCones(group, leafTipMat, crownTips, 0.38, 1.18, 16);
+  const branchMesh = instanceCones(group, leafTipMat, crownBranches, 0.44, 1.04, 14);
   const coreMesh = instanceCylinders(group, treeCoreMat, treeCores, 0.09, 0.16, 1.2);
   const treeHaloGeo = new THREE.TorusGeometry(1.2, 0.025, 6, 16);
   geos.push(trunkMesh.geo, lowerCrownMesh.geo, middleCrownMesh.geo, upperCrownMesh.geo, tipMesh.geo, branchMesh.geo, coreMesh.geo, treeHaloGeo);
@@ -361,10 +392,7 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   }
   // Los árboles se iluminan con puntuales sin sombra. En móvil bajan a dos: cada puntual
   // encarece el fragment shader de toda la escena.
-  const lowPower =
-    typeof window !== "undefined" &&
-    (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 720);
-  const every = lowPower ? 4 : 2;
+  const every = isLoDevice() ? 5 : 3;
   for (const light of treeLights.filter((_, i) => i % every === 0)) {
     lights.addFill(group, light.x, light.y, light.z, 0xff2745, 2.8, 10);
     lights.addGlint(group, light.x, light.y + 1.25, light.z);
@@ -375,6 +403,7 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   };
   drop("c-health-a", "health", -6, 0, -2);
   drop("c-health-b", "health", -12, 5.2, 13, 12);
+  drop("c-health-c", "health", 0, 9.8, 34, 12);
   drop("c-mega", "mega", 0, 11.2, 0, 28);
   drop("c-armor", "armor", 12, 3.4, -14, 18);
   drop("c-ammo", "ammo", -16, 2.2, -14, 10);
@@ -382,9 +411,13 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   drop("c-torpedo", "torpedo", -12, 5.2, 11, 18);
   drop("c-lance", "lance", 0, 6.2, 14, 18);
   drop("c-ion", "ion", -16, 1.6, 5.2, 20);
+  drop("c-fauces", "fauces", 8, 4.4, 6, 22);
+  drop("c-bate", "bate", -8, 0, 8, 18);
+  drop("c-martillo", "martillo", 14, 6.2, -6, 24);
   drop("c-rush", "rush", 2.2, 8, -1.2, 22);
   drop("c-blink", "blink", 12, 3.4, -12.4, 22);
   drop("c-volt", "volt", -2.2, 4.4, 2.6, 22);
+  drop("c-leap", "leap", 18, 6.2, 8, 24);
   drop("c-air-armor", "armor", 25, 8, -18, 20);
   drop("c-air-ion", "ion", 27, 11.2, 7, 22);
   drop("c-air-lance", "lance", -15, 12.2, 25, 22);
@@ -403,25 +436,70 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   spawnAt(-12, 5.2, 10.6);
   spawnAt(25, 8, -19.8);
   spawnAt(9, 14.2, 23.4);
+  spawnAt(18, 6.8, 0.4);
+  spawnAt(0, 9.8, 32.2);
 
-  const stars = loadSkyTex("/textures/sky-stars.jpg");
-  const skyGeo = new THREE.SphereGeometry(240, 32, 20);
-  const skyMat = new THREE.MeshBasicMaterial({
-    map: stars,
+  const skyPaths = [
+    "/textures/space/cumbre-cycle-start-v1.webp",
+    "/textures/space/cumbre-cycle-end-v1.webp",
+  ];
+  const skyTextures = skyPaths.map((path) => loadSkyTex(path, false));
+  const skyGeo = skySphereGeo();
+  const skyMaterials = skyTextures.map((map, index) => new THREE.MeshBasicMaterial({
+    map,
     side: THREE.BackSide,
     fog: false,
+    transparent: true,
+    opacity: index === 0 ? 1 : 0,
     depthWrite: false,
     toneMapped: false,
+  }));
+  const skyLayers = skyMaterials.map((material, index) => {
+    const mesh = new THREE.Mesh(skyGeo, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -20 + index;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.visible = index === 0;
+    scene.add(mesh);
+    return mesh;
   });
-  mats.push(skyMat);
-  const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.frustumCulled = false;
-  sky.renderOrder = -20;
-  sky.castShadow = false;
-  sky.receiveShadow = false;
-  scene.add(sky);
+  mats.push(...skyMaterials);
   geos.push(skyGeo);
 
+  const skyLo = isLoDevice();
+  let cycleStartedAt: number | null = null;
+  const startCycle = (epochMs: number) => {
+    const elapsed = Math.max(0, (Date.now() - epochMs) / 1000);
+    cycleStartedAt = performance.now() / 1000 - elapsed;
+  };
+  const updateSky = (now: number) => {
+    const elapsed = cycleStartedAt === null ? 0 : Math.max(0, now - cycleStartedAt);
+    const progress = Math.min(1, elapsed / ROUND_SECONDS);
+    let base = 0;
+    let overlay = 0;
+    let blend = 0;
+    if (progress >= 0.4 && progress < 0.62) {
+      overlay = 1;
+      blend = THREE.MathUtils.smoothstep(progress, 0.4, 0.62);
+    } else if (progress >= 0.62) {
+      base = overlay = 1;
+    }
+    if (skyLo && overlay !== base) {
+      if (blend >= 0.5) base = overlay;
+      overlay = base;
+      blend = 0;
+    }
+    for (let i = 0; i < skyLayers.length; i++) {
+      const isBase = i === base;
+      const isOverlay = i === overlay && overlay !== base;
+      skyLayers[i]!.visible = isBase || isOverlay;
+      skyMaterials[i]!.opacity = isBase ? 1 : isOverlay ? blend : 0;
+    }
+    lights.setTimeOfDay(progress);
+  };
+
+  geos.push(stampDecks(group, grassMat, decks, 2.4).geo);
   batch.build(group);
   scene.add(group);
 
@@ -435,17 +513,21 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
     waypoints,
     lights,
     update: (now) => {
-      leafMat.emissiveIntensity = 0.78 + Math.sin(now * 1.6) * 0.11;
-      leafTipMat.emissiveIntensity = 1.02 + Math.sin(now * 2.2 + 0.8) * 0.16;
+      leafMat.emissiveIntensity = 0.24 + Math.sin(now * 1.6) * 0.05;
+      leafTipMat.emissiveIntensity = 0.36 + Math.sin(now * 2.2 + 0.8) * 0.07;
       treeCoreMat.opacity = 0.86 + Math.sin(now * 2.6) * 0.08;
-      gateCoreMat.opacity = 0.24 + 0.15 * (0.5 + 0.5 * Math.sin(now * 2.4));
       for (let i = 0; i < gateRings.length; i++) gateRings[i]!.rotation.z = now * (i % 2 ? -0.45 : 0.45);
-      for (let i = 0; i < gateCores.length; i++) gateCores[i]!.scale.setScalar(0.9 + Math.sin(now * 2.1 + i) * 0.08);
+      for (let i = 0; i < gateCores.length; i++) {
+        gateCores[i]!.rotation.z = now * (i % 2 ? 0.35 : -0.35);
+        gateCores[i]!.scale.setScalar(0.94 + Math.sin(now * 2.1 + i) * 0.06);
+      }
       for (let i = 0; i < treeHalos.length; i++) treeHalos[i]!.rotation.z = now * 0.42 + i;
+      updateSky(now);
     },
+    startCycle,
     dispose: () => {
       scene.remove(group);
-      scene.remove(sky);
+      for (const layer of skyLayers) scene.remove(layer);
       lights.dispose();
       batch.dispose();
       group.traverse((obj) => {
@@ -453,6 +535,10 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
       });
       for (const g of geos) g.dispose();
       for (const m of mats) m.dispose();
+      for (let i = 0; i < skyTextures.length; i++) {
+        skyTextures[i]!.dispose();
+        THREE.Cache.remove(skyPaths[i]!);
+      }
     },
   };
 }

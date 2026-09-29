@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { ArenaAudio } from "./audio";
 import { buildArena, makeItemMesh, type ArenaData } from "./arena";
-import { projectileTexture } from "./textures";
+import { projectileTexture, isLoDevice, isStruggling } from "./textures";
 import { buildLave } from "./lave";
 import { buildLaberinto } from "./laberinto";
 import { buildMoon } from "./moon";
@@ -44,13 +44,15 @@ import {
   SPRINT,
   STEP_HEIGHT,
   STOP_SPEED,
+  MELEE_ORDER,
   WEAPON_META,
   WEAPON_ORDER,
+  isMelee,
   isPower,
   isWeaponId,
 } from "./constants";
-import { preloadAlienGltf } from "./alienGltf";
-import { preloadChibiGltf, preloadSentinelGltf } from "./sentinelGltf";
+import { packViewportScale, preloadWeaponPack, setPackAim } from "./weaponPack";
+import { preloadBotModels } from "./sentinelGltf";
 import { animateFighter, crackFighter, makeBotMesh, resetFighterMesh, shatterFighter } from "./fighterMesh";
 import { ParticleField, TraumaShake } from "./fx";
 import { BeamBatch, InstancePool } from "./instancing";
@@ -65,12 +67,15 @@ import { debugSpool } from "@/lib/debug-spool";
 
 export type { RemoteSnapshot } from "./network";
 
+/** Kit per bot slot: Gladiador goku, Operadora cowgirl, Ingeniero agent cowboy, Nyx venom. */
+const BOT_KITS = [10, 9, 7, 8] as const;
 const _look = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _crush = new THREE.Vector3();
 
 type Fighter = {
   id: string;
@@ -168,6 +173,7 @@ export type EngineHooks = {
   onHud: (h: HudSnapshot) => void;
   onScreen: (s: Screen) => void;
   onLock: (locked: boolean) => void;
+  onArenaCycleStart?: (epochMs: number) => void;
 };
 
 export class NexusArena {
@@ -181,6 +187,7 @@ export class NexusArena {
   private audio = new ArenaAudio();
   private arena!: ArenaData;
   private arenaId: ArenaId = "pozo";
+  private arenaCycleEpochMs: number | null = null;
   private fx = new ParticleField();
   private shake = new TraumaShake();
   private fighters: Fighter[] = [];
@@ -190,6 +197,7 @@ export class NexusArena {
   private items: WorldItem[] = [];
   private flags: LiveFlag[] = [];
   private teamScore = { ion: 0, ember: 0 };
+  private lastGun: WeaponId = "pulse";
   private recoil = 0;
   private eyeY = EYE;
   private running = false;
@@ -205,9 +213,13 @@ export class NexusArena {
   private hitmarker = 0;
   private hurt = 0;
   private deathT = 0;
+  private crushT = -1;
+  private crushFrom = new THREE.Vector3();
   private killFeed: KillFeedItem[] = [];
   private feedSeq = 0;
   private winner: string | null = null;
+  private endCuePlayed = false;
+  private reloadCue: { at: number; weapon: WeaponId } | null = null;
   private roundSeconds = 0;
   private credits = 35;
   private score = 0;
@@ -263,9 +275,9 @@ export class NexusArena {
     this.hooks = hooks;
     this.reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     this.loadCareer();
-    preloadAlienGltf();
-    preloadSentinelGltf();
-    preloadChibiGltf();
+    preloadWeaponPack();
+    // roster bots use the user-supplied models; older kits (alien, sentinel, chibi) load lazily
+    preloadBotModels();
     const skin = SKINS[settings.skin] ?? SKINS.cian;
     this.view = createArenaRenderer(canvas, settings.fov, skin.color);
     this.arena = buildArena(this.view.scene, this.view.renderer);
@@ -289,7 +301,8 @@ export class NexusArena {
         false,
       );
       bot.skill = 0.8 + i * 0.06;
-      bot.mesh = makeBotMesh(bot.color, i === 0 ? 4 : i === 1 ? 5 : i === 2 ? 6 : i);
+      // Gladiador: goku (10), Operadora: cowgirl (9), Ingeniero: agent cowboy (7), Nyx: venom (8)
+      bot.mesh = makeBotMesh(bot.color, BOT_KITS[i] ?? i);
       this.view.scene.add(bot.mesh);
       this.fighters.push(bot);
       this.spawn(bot);
@@ -438,6 +451,9 @@ export class NexusArena {
               ? buildLaberinto(this.view.scene, this.view.renderer)
               : buildArena(this.view.scene, this.view.renderer);
     this.arenaId = next;
+    if ((next === "mar" || next === "pozo" || next === "cumbre") && this.arenaCycleEpochMs !== null) {
+      this.arena.startCycle?.(this.arenaCycleEpochMs);
+    }
     this.mountItems();
   }
 
@@ -556,7 +572,15 @@ export class NexusArena {
       debugSpool.error("engine.arena", err);
       return;
     }
+    if (this.arenaId === "mar" || this.arenaId === "pozo" || this.arenaId === "cumbre") {
+      const epochMs = Date.now();
+      this.arenaCycleEpochMs = epochMs;
+      this.arena.startCycle?.(epochMs);
+      this.hooks.onArenaCycleStart?.(epochMs);
+    }
     this.winner = null;
+    this.endCuePlayed = false;
+    this.reloadCue = null;
     this.matchOn = true;
     this.killFeed = [];
     this.roundSeconds = ROUND_SECONDS;
@@ -583,6 +607,12 @@ export class NexusArena {
     if (!touch) this.requestLock();
   }
 
+  syncArenaCycleStart(epochMs: number) {
+    if (!Number.isFinite(epochMs) || Math.abs(Date.now() - epochMs) > 15 * 60_000) return;
+    this.arenaCycleEpochMs = epochMs;
+    if (this.arenaId === "mar" || this.arenaId === "pozo" || this.arenaId === "cumbre") this.arena.startCycle?.(epochMs);
+  }
+
   pause() {
     if (this.screen !== "playing") return;
     this.unlock();
@@ -601,6 +631,8 @@ export class NexusArena {
     this.matchOn = false;
     this.countdown = null;
     this.winner = null;
+    this.endCuePlayed = false;
+    this.reloadCue = null;
     this.setScreen("menu");
   }
 
@@ -667,9 +699,12 @@ export class NexusArena {
     }
     const color = 0x7af0e0;
     const remote = this.makeFighter(fighterId, label, color, "#7af0e0", false, true);
-    remote.mesh = makeBotMesh(color, this.fighters.length);
+    // explicit remote kit: same as before (5, 6, then procedural) - never the bot roster models
+    const slot = this.fighters.length;
+    remote.mesh = makeBotMesh(color, slot >= 4 && slot <= 6 ? slot : slot % 4);
     this.view.scene.add(remote.mesh);
     this.fighters.push(remote);
+    if (this.matchOn) this.fullLoadout(remote);
     this.spawn(remote);
     remote.mesh.visible = true;
   }
@@ -754,8 +789,8 @@ export class NexusArena {
     isPlayer: boolean,
     isRemote = false,
   ): Fighter {
-    const mag = { pulse: 40, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
-    const reserve = { pulse: 80, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
+    const mag = { pulse: 40, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
+    const reserve = { pulse: 80, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
     return {
       id,
       name,
@@ -835,11 +870,17 @@ export class NexusArena {
   }
 
   private giveWeapon(f: Fighter, w: WeaponId) {
+    if (isMelee(w)) {
+      for (const melee of MELEE_ORDER) {
+        if (melee !== w) f.owned.delete(melee);
+      }
+    }
     const meta = WEAPON_META[w];
     f.owned.add(w);
     f.mag[w] = meta.mag;
     f.reserve[w] = Math.max(f.reserve[w], meta.reserve);
     f.weapon = w;
+    if (f.isPlayer && !isMelee(w)) this.lastGun = w;
   }
 
   private applyPrize() {
@@ -879,8 +920,8 @@ export class NexusArena {
   private resetLoadout(f: Fighter) {
     f.owned = new Set(["pulse"]);
     f.weapon = "pulse";
-    f.mag = { pulse: 40, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
-    f.reserve = { pulse: 80, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
+    f.mag = { pulse: 40, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
+    f.reserve = { pulse: 80, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
     f.health = 100;
     f.armor = 0;
     f.powers = { rush: 0, blink: 0, volt: 0, leap: 0 };
@@ -890,11 +931,12 @@ export class NexusArena {
   }
 
   private fullLoadout(f: Fighter) {
-    f.owned = new Set(WEAPON_ORDER);
+    const start: WeaponId[] = ["pulse", "scatter", "knife"];
+    f.owned = new Set(start);
     f.weapon = "pulse";
-    f.mag = { pulse: 0, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
-    f.reserve = { pulse: 0, scatter: 0, torpedo: 0, lance: 0, ion: 0 };
-    for (const w of WEAPON_ORDER) {
+    f.mag = { pulse: 0, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
+    f.reserve = { pulse: 0, scatter: 0, torpedo: 0, lance: 0, ion: 0, fauces: 0, knife: 0, bate: 0, martillo: 0 };
+    for (const w of start) {
       f.mag[w] = WEAPON_META[w].mag;
       f.reserve[w] = WEAPON_META[w].reserve;
     }
@@ -925,6 +967,7 @@ export class NexusArena {
       }
       if (on && f.respawnAt === 1e12) {
         this.resetLoadout(f);
+        this.fullLoadout(f);
         this.spawn(f);
       }
       if (f.mesh) f.mesh.visible = on && f.alive;
@@ -965,6 +1008,7 @@ export class NexusArena {
     f.protectUntil = performance.now() / 1000 + 1.4;
     if (f.isPlayer) {
       this.deathT = 0;
+      this.crushT = -1;
       this.hurt = 0;
       this.eyeY = EYE;
     }
@@ -977,26 +1021,44 @@ export class NexusArena {
 
   private frame = (nowMs: number) => {
     if (this.disposed) return;
+    const now = nowMs / 1000;
+    const dt = this.loop.begin(nowMs);
     try {
-      const now = nowMs / 1000;
-      const dt = this.loop.begin(nowMs);
       this.input.pollGamepad();
       this.loop.consumeFixed((step) => this.fixed(step, now));
-      this.visuals(dt, now);
-      this.view.render(this.screen === "playing" && this.player.alive);
-      this.view.noteFrame(dt);
-      this.hudClock += dt;
-      if (this.hudClock > 0.05) {
-        this.hudClock = 0;
-        this.emitHud();
-      }
-      this.input.endFrame();
     } catch (err) {
-      if (this.frameFails < 24) {
+      if (this.frameFails < 8) {
         this.frameFails += 1;
-        debugSpool.error("engine.frame", err, { n: this.frameFails });
+        debugSpool.error("engine.fixed", err, { n: this.frameFails });
       }
     }
+    try {
+      this.visuals(dt, now);
+    } catch (err) {
+      if (this.frameFails < 8) {
+        this.frameFails += 1;
+        debugSpool.error("engine.visuals", err, { n: this.frameFails });
+      }
+    }
+    try {
+      this.view.render(this.screen === "playing" && this.player.alive);
+      this.view.noteFrame(dt);
+    } catch (err) {
+      if (this.frameFails < 8) {
+        this.frameFails += 1;
+        debugSpool.error("engine.render", err, { n: this.frameFails });
+      }
+    }
+    this.hudClock += dt;
+    if (this.hudClock > 0.05) {
+      this.hudClock = 0;
+      try {
+        this.emitHud();
+      } catch {
+        /* HUD no debe frenar el juego */
+      }
+    }
+    this.input.endFrame();
   };
 
   private fixed(dt: number, now: number) {
@@ -1022,7 +1084,20 @@ export class NexusArena {
     for (const f of this.fighters) {
       if (!f.isPlayer && !f.isRemote) this.thinkBot(f, now, dt);
       if (!f.alive) {
+        if (f.isPlayer && this.crushT >= 0) {
+          this.crushT += dt;
+          f.pos.copy(this.crushPose(this.crushT));
+          f.vel.set(0, 0, 0);
+        }
         if (!f.isRemote && this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f);
+        if (f.alive) continue;
+        if (f.isPlayer && this.crushT >= 0) {
+          if (f.mesh && f.mesh.visible) {
+            f.mesh.position.copy(f.pos);
+            f.mesh.rotation.y += dt * 8;
+          }
+          continue;
+        }
         f.vel.y -= this.arenaG() * (this.inWater(f) ? 0.38 : 1) * dt;
         f.vel.x *= Math.exp(-2.8 * dt);
         f.vel.z *= Math.exp(-2.8 * dt);
@@ -1173,10 +1248,27 @@ export class NexusArena {
     this.player.wishJump = this.input.jumping();
     this.player.wantsFire = this.input.fireHeld || this.input.fireClicked;
     if (this.input.reloadClicked) this.startReload(this.player, performance.now() / 1000);
+    if (this.reloadCue) {
+      const cueNow = performance.now() / 1000;
+      if (cueNow >= this.reloadCue.at) {
+        if (cueNow - this.reloadCue.at < 0.5 && this.player.alive && this.player.weapon === this.reloadCue.weapon) this.audio.reloadDone();
+        this.reloadCue = null;
+      }
+    }
     if (this.input.grenadeClicked) this.throwPixelGrenade(this.player);
     if (this.input.slot) {
       const id = WEAPON_ORDER[this.input.slot - 1];
-      if (id && this.player.owned.has(id)) this.player.weapon = id;
+      if (id && this.player.owned.has(id)) {
+        this.player.weapon = id;
+        this.lastGun = id;
+      }
+    }
+    if (this.input.meleeToggle) {
+      const melee = MELEE_ORDER.find((id) => this.player.owned.has(id));
+      if (melee) {
+        if (isMelee(this.player.weapon)) this.player.weapon = this.lastGun;
+        else this.player.weapon = melee;
+      }
     }
     if (zooming && spec && this.input.wheel) {
       const step = (spec.max - spec.min) / 6;
@@ -1213,14 +1305,17 @@ export class NexusArena {
     f.grenades -= 1;
     this.pickupMsg = `GRANADA PÍXEL · ${f.grenades} RESTANTES`;
     this.pickupT = 1.1;
-    this.audio.fire("torpedo");
+    this.audio.grenade();
   }
 
   private cycle(f: Fighter, dir: 1 | -1) {
-    const owned = WEAPON_ORDER.filter((w) => f.owned.has(w));
+    const guns = WEAPON_ORDER.filter((w) => f.owned.has(w));
+    const melee = MELEE_ORDER.find((w) => f.owned.has(w));
+    const owned = melee ? [...guns, melee] : guns;
     if (!owned.length) return;
     const i = owned.indexOf(f.weapon);
     f.weapon = owned[(i + dir + owned.length) % owned.length]!;
+    if (!isMelee(f.weapon)) this.lastGun = f.weapon;
   }
 
   private moveFighter(f: Fighter, dt: number, now: number) {
@@ -1491,6 +1586,10 @@ export class NexusArena {
     if (now < f.heatUntil) return;
     for (const hazard of this.arena.hazards ?? []) {
       if (!this.insideHazard(f, hazard)) continue;
+      if (hazard.crush) {
+        this.crushFighter(f, hazard.x, hazard.y, hazard.z);
+        return;
+      }
       f.heatUntil = now + 0.42;
       const dx = f.pos.x - hazard.x;
       const dz = f.pos.z - hazard.z;
@@ -1593,6 +1692,12 @@ export class NexusArena {
     const w = f.weapon;
     const meta = isWeaponId(w) ? WEAPON_META[w] : undefined;
     if (!meta) return;
+    if (meta.kind === "melee") {
+      if (now - f.lastShot < 60 / meta.rpm) return;
+      f.lastShot = now;
+      this.swingMelee(f, w);
+      return;
+    }
     if (now < f.reloadUntil) return;
     if (now - f.lastShot < 60 / meta.rpm) return;
     if (f.mag[w] <= 0) {
@@ -1629,7 +1734,7 @@ export class NexusArena {
         }
         const hit = this.hitscan(_origin, _dir, meta.range, f.id);
         const shotColor = volt ? POWER_META.volt.color : meta.color;
-        if (w === "lance" || w === "pulse" || volt || (w === "scatter" && !flashed)) {
+        if (w === "lance" || w === "pulse" || volt || ((w === "scatter" || w === "fauces") && !flashed)) {
           this.spawnBeam(_origin, hit.point, shotColor, w === "lance" ? 0.22 : 0.1);
         }
         this.fx.shotImpact(
@@ -1644,13 +1749,21 @@ export class NexusArena {
           !flashed,
         );
         if (!flashed) {
-          this.fx.pixelBurst(hit.point.x, hit.point.y, hit.point.z, shotColor, w === "lance" || w === "scatter" ? "blast" : "tick");
-          this.arena.lights.flash(hit.point.x, hit.point.y, hit.point.z, shotColor, w === "lance" ? 18 : 8);
+          this.fx.pixelBurst(hit.point.x, hit.point.y, hit.point.z, shotColor, w === "lance" || w === "scatter" || w === "fauces" ? "blast" : "tick");
+          this.arena.lights.flash(hit.point.x, hit.point.y, hit.point.z, shotColor, w === "lance" || w === "fauces" ? 18 : 8);
           flashed = true;
         }
         if (hit.fighter) {
           const head = hit.point.y > hit.fighter.pos.y + hit.fighter.height * 0.72;
-          const dmg = meta.damage * dmgMul * (head ? 1.6 : 1);
+          let fall = 1;
+          if (w === "scatter") {
+            const t = THREE.MathUtils.smoothstep(hit.dist, 6, meta.range);
+            fall = 1 - 0.65 * t;
+          } else if (w === "fauces") {
+            const t = THREE.MathUtils.smoothstep(hit.dist, 4, meta.range);
+            fall = 1 - 0.3 * t;
+          }
+          const dmg = meta.damage * fall * dmgMul * (head ? 1.6 : 1);
           this.hurtFighter(hit.fighter, dmg, f, w, _dir, meta.knock, head);
           if (volt) this.chainVolt(f, hit.fighter, dmg * 0.4);
           if (f.isPlayer) this.hitmarker = 0.12;
@@ -1682,12 +1795,58 @@ export class NexusArena {
     if (f.mag[w] <= 0 && f.reserve[w] > 0) this.startReload(f, now);
   }
 
+  private swingMelee(f: Fighter, w: WeaponId) {
+    const meta = WEAPON_META[w];
+    const now = performance.now() / 1000;
+    const volt = now < f.powers.volt;
+    const dmgMul = volt ? 1.45 : 1;
+    if (f.isPlayer) {
+      this.audio.fire(w);
+      this.recoil += meta.kick;
+      this.shake.add(meta.kick * 1.2);
+    }
+    this.lookVec(f, _look);
+    const eye = f.isPlayer ? this.eyeY * 0.62 : f.height * 0.55;
+    _origin.copy(f.pos).setY(f.pos.y + eye);
+    let bestF: Fighter | null = null;
+    let bestD = meta.range;
+    const bestPoint = new THREE.Vector3();
+    const bestDir = new THREE.Vector3();
+    const fan = w === "knife" ? [-0.2, 0, 0.2] : [-0.5, -0.18, 0.18, 0.5];
+    for (const off of fan) {
+      const c = Math.cos(off);
+      const s = Math.sin(off);
+      _dir.set(_look.x * c + _look.z * s, _look.y * 0.35, -_look.x * s + _look.z * c).normalize();
+      const hit = this.hitscan(_origin, _dir, meta.range, f.id);
+      if (hit.fighter && hit.dist < bestD) {
+        bestD = hit.dist;
+        bestF = hit.fighter;
+        bestPoint.copy(hit.point);
+        bestDir.copy(_dir);
+      }
+    }
+    if (!bestF) return;
+    const head = bestPoint.y > bestF.pos.y + bestF.height * 0.72;
+    const dmg = meta.damage * dmgMul * (head ? 1.6 : 1);
+    this.hurtFighter(bestF, dmg, f, w, bestDir, meta.knock, head);
+    this.fx.pixelBurst(bestPoint.x, bestPoint.y, bestPoint.z, meta.color, "blast");
+    this.arena.lights.flash(bestPoint.x, bestPoint.y, bestPoint.z, meta.color, w === "knife" ? 6 : 14);
+    if (f.isPlayer) {
+      this.hitmarker = 0.14;
+      this.audio.hit();
+    }
+  }
+
   private startReload(f: Fighter, now: number) {
     const w = f.weapon;
     const meta = isWeaponId(w) ? WEAPON_META[w] : undefined;
     if (!meta) return;
     if ((f.mag[w] ?? 0) >= meta.mag || (f.reserve[w] ?? 0) <= 0) return;
     f.reloadUntil = now + meta.reload;
+    if (f.isPlayer) {
+      this.audio.reload();
+      this.reloadCue = { at: now + meta.reload, weapon: w };
+    }
     const need = meta.mag - f.mag[w];
     const take = Math.min(need, f.reserve[w]);
     f.mag[w] += take;
@@ -1872,6 +2031,36 @@ export class NexusArena {
     }
   }
 
+  private crushFighter(f: Fighter, x: number, y: number, z: number) {
+    if (!f.alive) return;
+    _dir.set(0, 1, 0);
+    this.hurtFighter(f, 999, null, "world", _dir, 0, false);
+    this.fx.burst(x, y + 0.4, z, 18, 0xff4a18, 9, 0.45, 0.16, 2.4);
+    if (!f.isPlayer) return;
+    this.crushT = 0;
+    this.crushFrom.set(x, y + 0.2, z);
+    f.respawnAt = performance.now() / 1000 + 3.9;
+    this.pickupMsg = "TRITURADO · AL ESPACIO";
+    this.pickupT = 2.4;
+    this.shake.add(1);
+    this.hurt = 1;
+  }
+
+  private crushPose(t: number) {
+    const x = this.crushFrom.x;
+    const z = this.crushFrom.z;
+    const y0 = this.crushFrom.y;
+    if (t < 0.36) {
+      return _crush.set(x + Math.sin(t * 78) * 0.16, y0 + Math.sin(t * 46) * 0.08, z + Math.cos(t * 64) * 0.08);
+    }
+    const u = Math.min(1, (t - 0.36) / 2.2);
+    const accel = 1 - (1 - u) * (1 - u);
+    const y = y0 + (96 - y0) * accel;
+    const spin = t * 4.8;
+    const spread = accel * 16;
+    return _crush.set(x + Math.cos(spin) * spread, y, z + Math.sin(spin) * spread);
+  }
+
   private kill(f: Fighter, attacker: Fighter | null, weapon: WeaponId | "world", headshot: boolean) {
     if (!f.alive) return;
     f.alive = false;
@@ -1944,7 +2133,8 @@ export class NexusArena {
           medal = "RACHA x10";
         }
         this.grant(cr, pts, medal);
-        this.audio.frag();
+        if (headshot) this.audio.headshot();
+        else this.audio.frag();
       }
     } else if (f.isPlayer) {
       f.frags = Math.max(0, f.frags - 1);
@@ -1957,6 +2147,24 @@ export class NexusArena {
       headshot,
     });
     this.killFeed = this.killFeed.slice(0, 5);
+  }
+
+  /** Fanfarria de fin de partida (una sola vez por partida). place: 1 campeón, 2 subcampeón, 0 derrota. */
+  private playEndCue(place: 0 | 1 | 2) {
+    if (this.endCuePlayed) return;
+    this.endCuePlayed = true;
+    this.reloadCue = null;
+    if (place === 1) this.audio.victory(1);
+    else if (place === 2) this.audio.victory(2);
+    else this.audio.defeat();
+  }
+
+  private playerPlace(): 0 | 1 | 2 {
+    const ranked = [...this.fighters]
+      .filter((f) => f.isPlayer || f.respawnAt !== 1e12)
+      .sort((a, b) => b.frags - a.frags || a.deaths - b.deaths);
+    const i = ranked.findIndex((f) => f.isPlayer);
+    return i === 0 ? 1 : i === 1 ? 2 : 0;
   }
 
   private checkWinner() {
@@ -1974,6 +2182,7 @@ export class NexusArena {
         if (f.isPlayer) {
           this.grant(140, 650, "CAMPEÓN");
         }
+        this.playEndCue(f.isPlayer ? 1 : this.playerPlace() === 2 ? 2 : 0);
         this.closeRound();
         this.unlock();
         this.setScreen("ended");
@@ -1994,6 +2203,7 @@ export class NexusArena {
     this.winner = `Equipo ${meta.label}`;
     this.matchOn = false;
     if (this.player.team === team) this.grant(140, 650, "CAPTURA · CAMPEÓN");
+    this.playEndCue(this.player.team === team ? 1 : 0);
     this.closeRound();
     this.unlock();
     this.setScreen("ended");
@@ -2021,6 +2231,7 @@ export class NexusArena {
     } else if (ranked[1]?.isPlayer) {
       this.grant(45, 180, "SUBCAMPEÓN · +45 CR");
     }
+    this.playEndCue(ranked[0]?.isPlayer ? 1 : ranked[1]?.isPlayer ? 2 : 0);
     this.closeRound();
     this.unlock();
     this.setScreen("ended");
@@ -2310,9 +2521,11 @@ export class NexusArena {
     const high = f.pos.y > target.pos.y + 1.35 && sees;
     const hold =
       weak ? 1 :
-      high && w !== "scatter" ? (now < f.holdUntil ? 0 : 0.15) :
+      high && w !== "scatter" && w !== "fauces" && WEAPON_META[w].kind !== "melee" ? (now < f.holdUntil ? 0 : 0.15) :
       w === "lance" ? (best < 12 ? -1 : best > 22 ? 0.45 : 0) :
+      WEAPON_META[w].kind === "melee" ? (best > 2.2 ? 1 : 0) :
       w === "scatter" ? (best > 8 ? 1 : best < 3.2 ? -0.35 : 0.5) :
+      w === "fauces" ? (best > 8 ? 1 : best < 2.2 ? -0.1 : 0.15) :
       w === "torpedo" ? (best < 7 ? -1 : best > 16 ? 0.55 : 0.05) :
       w === "ion" ? (best < 7 ? -0.45 : best > 16 ? 0.55 : 0.2) :
       best > 14 ? 0.7 : best < 4 ? -0.25 : 0.3;
@@ -2329,7 +2542,8 @@ export class NexusArena {
     f.wishJump = f.grounded && dy > 0.85 && horiz < Math.max(6.5, jumpH) && dy < jumpH * 0.96;
     if (!f.grounded && f.blinkCharges > 0 && now < f.powers.blink && (hurt || dodging) && best < 9) f.wishJump = true;
     const tooClose = w === "torpedo" && best < 5.5 && f.grounded;
-    f.wantsFire = !tooClose && now >= f.reactUntil && aimDot > 0.945 - f.skill * 0.07 && best < WEAPON_META[w].range;
+    const melee = WEAPON_META[w].kind === "melee";
+    f.wantsFire = !tooClose && now >= f.reactUntil && (melee ? aimDot > 0.55 : aimDot > 0.945 - f.skill * 0.07) && best < WEAPON_META[w].range;
   }
 
   private crowded(f: Fighter) {
@@ -2510,10 +2724,16 @@ export class NexusArena {
   }
 
   private pickBotWeapon(f: Fighter, dist: number) {
+    const melee = MELEE_ORDER.find((id) => f.owned.has(id));
+    const close = dist < 2.6 && melee ? [melee] : [];
     const prefer: WeaponId[] =
-      dist < 6 ? ["scatter", "ion", "pulse", "torpedo", "lance"] : dist > 16 ? ["lance", "torpedo", "ion", "pulse", "scatter"] : ["torpedo", "ion", "lance", "scatter", "pulse"];
+      dist < 6
+        ? [...close, "fauces", "scatter", "ion", "pulse", "torpedo", "lance"]
+        : dist > 16
+          ? ["lance", "torpedo", "ion", "pulse", "scatter", "fauces"]
+          : ["torpedo", "ion", "lance", "fauces", "scatter", "pulse"];
     for (const w of prefer) {
-      if (f.owned.has(w) && (f.mag[w] > 0 || f.reserve[w] > 0)) {
+      if (f.owned.has(w) && (isMelee(w) || f.mag[w] > 0 || f.reserve[w] > 0)) {
         f.weapon = w;
         return;
       }
@@ -2582,7 +2802,8 @@ export class NexusArena {
     if (!this.laser.visible) return;
     this.lookVec(this.player, _look);
     _origin.set(this.player.pos.x, this.player.pos.y + this.eyeY, this.player.pos.z).addScaledVector(_look, 0.45);
-    const hit = this.hitscan(_origin, _look, WEAPON_META[this.player.weapon].range, this.player.id);
+    const range = (isWeaponId(this.player.weapon) ? WEAPON_META[this.player.weapon] : WEAPON_META.pulse).range;
+    const hit = this.hitscan(_origin, _look, range, this.player.id);
     const attr = this.laser.geometry.getAttribute("position") as THREE.BufferAttribute;
     attr.setXYZ(0, _origin.x, _origin.y, _origin.z);
     attr.setXYZ(1, hit.point.x, hit.point.y, hit.point.z);
@@ -2616,8 +2837,14 @@ export class NexusArena {
     }
     this.landDip += (0 - this.landDip) * (1 - Math.exp(-10 * dt));
 
+    const cheapFx = isLoDevice() || isStruggling();
     for (const it of this.items) {
       if (!it.ready) continue;
+      if (cheapFx) {
+        it.mesh.rotation.y += dt * 1.15;
+        it.mesh.position.y = it.y + 0.38;
+        continue;
+      }
       const power = isPower(it.kind);
       const featured = it.mesh.userData.featuredPickup === true;
       const flat = it.mesh.userData.flatPickup === true;
@@ -2674,7 +2901,19 @@ export class NexusArena {
       this.fx.rush(this.player.pos.x, this.player.pos.y + 0.4, this.player.pos.z, POWER_META.rush.color);
     }
 
-    if (dying) {
+    if (dying && this.crushT >= 0) {
+      const bite = this.crushT < 0.36;
+      const up = bite ? 0 : Math.min(1, (this.crushT - 0.36) / 2.2);
+      this.hurt = Math.max(this.hurt, bite ? 1 : 0.72);
+      camera.position.set(
+        this.player.pos.x + Math.sin(now * 9) * (bite ? 0.22 : 0.08),
+        this.player.pos.y + (bite ? 0.42 : 1.35),
+        this.player.pos.z + (bite ? 0.15 : -0.2),
+      );
+      const pitch = bite ? 0.95 : -1.05 + up * 1.7;
+      const roll = Math.sin(now * (bite ? 28 : 6)) * (bite ? 0.55 : 0.22);
+      camera.quaternion.setFromEuler(new THREE.Euler(pitch, this.player.yaw + this.crushT * 2.4, roll, "YXZ"));
+    } else if (dying) {
       const fall = 1 - Math.pow(1 - Math.min(1, this.deathT / 0.62), 3);
       this.eyeY += (0.28 - this.eyeY) * Math.min(1, 1 - Math.exp(-7 * dt));
       const pitch = this.player.pitch + (1.12 - this.player.pitch) * fall;
@@ -2698,20 +2937,23 @@ export class NexusArena {
     const ads = adsPose(this.player.weapon);
     this.adsT += ((this.input.aimHeld ? 1 : 0) - this.adsT) * (1 - Math.exp(-14 * dt));
     const t = this.adsT;
-    gunRoot.scale.setScalar(1.22 - 0.2 * t);
+    const viewportScale = packViewportScale(this.player.weapon, gunCam.aspect);
+    gunRoot.scale.setScalar((1.22 - 0.2 * t) * viewportScale);
     gunCam.fov = 50 - 8 * t;
     gunCam.updateProjectionMatrix();
     gunRoot.position.set(
-      rest.x + (ads.x - rest.x) * t + floatX * (1 - t * 0.6) + this.swayX * 0.35 * (1 - t),
+      (rest.x + (ads.x - rest.x) * t + floatX * (1 - t * 0.6) + this.swayX * 0.35 * (1 - t)) * viewportScale,
       rest.y + (ads.y - rest.y) * t + floatY * (1 - t * 0.5) - this.recoil * (0.42 - t * 0.2),
       rest.z + (ads.z - rest.z) * t - this.recoil * (0.7 - t * 0.25),
     );
+    gunRoot.position.y *= (0.65 + 0.35 * viewportScale) * (1 - t) + viewportScale * t;
     gunRoot.rotation.set(
       -0.04 * t + this.recoil * (0.28 - t * 0.16),
-      0.02 * (1 - t) + floatX * 0.4,
+      0.02 * (1 - t) + floatX * 0.4 + (isMelee(this.player.weapon) ? Math.sin(Math.min(1, this.recoil) * Math.PI) * 0.85 : 0),
       this.recoil * 0.06 * (1 - t),
     );
     for (const [id, g] of guns) {
+      if (id === this.player.weapon) setPackAim(g, id, t);
       const scoped = id === this.player.weapon && !!SCOPE[id] && t > 0.82;
       g.visible = id === this.player.weapon && this.player.alive && this.screen === "playing" && !scoped;
       g.traverse((obj) => {
@@ -2740,7 +2982,7 @@ export class NexusArena {
       ammo: p.mag[w] ?? 0,
       reserve: p.reserve[w] ?? 0,
       weapon: w,
-      weapons: WEAPON_ORDER.filter((id) => p.owned.has(id)),
+      weapons: [...WEAPON_ORDER.filter((id) => p.owned.has(id)), ...MELEE_ORDER.filter((id) => p.owned.has(id))],
       frags: p.frags,
       deaths: p.deaths,
       fragLimit: this.settings.fragLimit,

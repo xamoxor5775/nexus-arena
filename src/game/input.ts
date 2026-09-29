@@ -20,6 +20,8 @@ const GAME_CODES = new Set([
   "Digit3",
   "Digit4",
   "Digit5",
+  "Digit6",
+  "KeyV",
   "KeyP",
   "KeyG",
   "KeyN",
@@ -48,7 +50,10 @@ export class GameInput {
   aimHeld = false;
   nextWeapon = 0;
   prevWeapon = 0;
+  /** +1 rueda abajo, -1 rueda arriba. */
+  wheel = 0;
   slot: number | null = null;
+  meleeToggle = false;
   tabHeld = false;
   touchMoveX = 0;
   touchMoveY = 0;
@@ -69,6 +74,8 @@ export class GameInput {
       if (e.code === "Digit3") this.slot = 3;
       if (e.code === "Digit4") this.slot = 4;
       if (e.code === "Digit5") this.slot = 5;
+      if (e.code === "Digit6") this.slot = 6;
+      if (e.code === "KeyV") this.meleeToggle = true;
       if (e.code === "KeyQ") this.prevWeapon = 1;
       if (e.code === "KeyE") this.nextWeapon = 1;
     };
@@ -96,8 +103,8 @@ export class GameInput {
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (e.deltaY > 0) this.nextWeapon = 1;
-      else this.prevWeapon = 1;
+      if (e.deltaY > 0) this.wheel = 1;
+      else if (e.deltaY < 0) this.wheel = -1;
     };
     const onContext = (e: Event) => e.preventDefault();
 
@@ -215,7 +222,9 @@ export class GameInput {
     this.grenadeClicked = false;
     this.nextWeapon = 0;
     this.prevWeapon = 0;
+    this.wheel = 0;
     this.slot = null;
+    this.meleeToggle = false;
     this.tabHeld = this.has("Tab");
   }
 }

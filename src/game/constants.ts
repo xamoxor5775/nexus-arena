@@ -154,10 +154,25 @@ export function isPublicRoomId(room: string): boolean {
   return room === "nexus-arena-public-v1" || /^(nexus-(pozo|cumbre|lave|luna|laberinto|mar)-(dm|duel)|nexus-luna-ctf)$/.test(room);
 }
 
-export const WEAPON_ORDER: WeaponId[] = ["pulse", "scatter", "torpedo", "lance", "ion"];
+export const WEAPON_ORDER: WeaponId[] = ["pulse", "scatter", "torpedo", "lance", "ion", "fauces"];
+export const MELEE_ORDER: WeaponId[] = ["knife", "bate", "martillo"];
 
 export function isWeaponId(k: string): k is WeaponId {
-  return k === "pulse" || k === "scatter" || k === "torpedo" || k === "lance" || k === "ion";
+  return (
+    k === "pulse" ||
+    k === "scatter" ||
+    k === "torpedo" ||
+    k === "lance" ||
+    k === "ion" ||
+    k === "fauces" ||
+    k === "knife" ||
+    k === "bate" ||
+    k === "martillo"
+  );
+}
+
+export function isMelee(k: WeaponId): boolean {
+  return k === "knife" || k === "bate" || k === "martillo";
 }
 
 export const WEAPON_META: Record<
@@ -165,7 +180,7 @@ export const WEAPON_META: Record<
   {
     label: string;
     slot: number;
-    kind: "hitscan" | "projectile";
+    kind: "hitscan" | "projectile" | "melee";
     rpm: number;
     damage: number;
     pellets: number;
@@ -188,7 +203,7 @@ export const WEAPON_META: Record<
     rpm: 620,
     damage: 9,
     pellets: 1,
-    spread: 0.016,
+    spread: 0.007,
     kick: 0.01,
     range: 110,
     speed: 0,
@@ -222,7 +237,7 @@ export const WEAPON_META: Record<
     slot: 3,
     kind: "projectile",
     rpm: 58,
-    damage: 92,
+    damage: 100,
     pellets: 1,
     spread: 0.004,
     kick: 0.06,
@@ -257,7 +272,7 @@ export const WEAPON_META: Record<
     label: "ION",
     slot: 5,
     kind: "projectile",
-    rpm: 390,
+    rpm: 300,
     damage: 17,
     pellets: 1,
     spread: 0.012,
@@ -270,6 +285,78 @@ export const WEAPON_META: Record<
     reserve: 80,
     reload: 1.35,
     color: 0x5aa8ff,
+  },
+  fauces: {
+    label: "FAUCES",
+    slot: 6,
+    kind: "hitscan",
+    rpm: 52,
+    damage: 78,
+    pellets: 1,
+    spread: 0.006,
+    kick: 0.072,
+    range: 12,
+    speed: 0,
+    splash: 0,
+    knock: 9,
+    mag: 4,
+    reserve: 12,
+    reload: 1.65,
+    color: 0xff8a3a,
+  },
+  knife: {
+    label: "ESPADA",
+    slot: 7,
+    kind: "melee",
+    rpm: 150,
+    damage: 46,
+    pellets: 1,
+    spread: 0,
+    kick: 0.34,
+    range: 2.35,
+    speed: 0,
+    splash: 0,
+    knock: 3.4,
+    mag: 1,
+    reserve: 0,
+    reload: 0,
+    color: 0xff7a32,
+  },
+  bate: {
+    label: "BATE",
+    slot: 8,
+    kind: "melee",
+    rpm: 78,
+    damage: 72,
+    pellets: 1,
+    spread: 0,
+    kick: 0.55,
+    range: 3.05,
+    speed: 0,
+    splash: 0,
+    knock: 12,
+    mag: 1,
+    reserve: 0,
+    reload: 0,
+    color: 0xc4843a,
+  },
+  martillo: {
+    label: "MARTILLO",
+    slot: 9,
+    kind: "melee",
+    rpm: 46,
+    damage: 100,
+    pellets: 1,
+    spread: 0,
+    kick: 0.78,
+    range: 2.7,
+    speed: 0,
+    splash: 0,
+    knock: 16,
+    mag: 1,
+    reserve: 0,
+    reload: 0,
+    color: 0xb7c0c8,
   },
 };
 
@@ -291,6 +378,10 @@ export const SHOP_META: Record<ShopItemId, { label: string; cost: number; kind: 
   torpedo: { label: "TORPEDO", cost: 120, kind: "weapon", color: "#ff7a3a" },
   lance: { label: "LANCE", cost: 160, kind: "weapon", color: "#2ee0c8" },
   ion: { label: "ION", cost: 220, kind: "weapon", color: "#5aa8ff" },
+  fauces: { label: "FAUCES", cost: 140, kind: "weapon", color: "#d7a15a" },
+  knife: { label: "ESPADA", cost: 0, kind: "weapon", color: "#ff7a32" },
+  bate: { label: "BATE", cost: 40, kind: "weapon", color: "#c4843a" },
+  martillo: { label: "MARTILLO", cost: 80, kind: "weapon", color: "#b7c0c8" },
   rush: { label: "VELOCIDAD", cost: 45, kind: "power", color: "#ffc44d" },
   blink: { label: "FASE", cost: 55, kind: "power", color: "#7af0ff" },
   volt: { label: "MEGAVATIO", cost: 70, kind: "power", color: "#ff5a3a" },

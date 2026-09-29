@@ -1,22 +1,29 @@
 import * as THREE from "three";
 import { boxAt } from "./collision";
-import type { AABB, ItemPad, JumpPad, Spawn, TeleportGate } from "./types";
-import { isPower, POWER_META } from "./constants";
-import { loadArenaMaps, loadSkyTex, loadTex, pickupTexture, supplyCrateTexture } from "./textures";
+import type { AABB, FlagPad, HazardZone, ItemPad, JumpPad, Spawn, TeleportGate, WaterZone } from "./types";
+import { isPower, POWER_META, ROUND_SECONDS } from "./constants";
+import { loadArenaMaps, loadPozoSurface, loadSkyTex, loadTex, pickupTexture, jumpPadTex, portalTex, loadIconTex, isLoDevice, smokePuffTex, skySphereGeo } from "./textures";
 import { createArenaLights, type ArenaLights } from "./lighting";
-import { BoxBatch, bakeMeshes, instanceCylinders, instancePlanes } from "./instancing";
+import { BoxBatch, bakeMeshes, instanceCylinders, instanceDiscs, instancePlanes, stampDecks } from "./instancing";
+import { mountPozoCar } from "./pozoCar";
 
 export type ArenaData = {
   group: THREE.Group;
   solids: AABB[];
   pads: JumpPad[];
-  hazards?: Array<{ x: number; y: number; z: number; radius: number; damage: number; color: number }>;
+  hazards?: HazardZone[];
   teleports?: TeleportGate[];
   items: ItemPad[];
   spawns: Spawn[];
   waypoints: { x: number; y: number; z: number }[];
   lights: ArenaLights;
+  flags?: FlagPad[];
+  killY?: number;
+  gravity?: number;
+  jumpVel?: number;
+  water?: WaterZone[];
   update?: (now: number, dt: number) => void;
+  startCycle?: (epochMs: number) => void;
   dispose: () => void;
 };
 
@@ -34,6 +41,574 @@ function addBox(
 ) {
   batch.add(mat, x, y, z, w, h, d);
   if (collide) solids.push(boxAt(x, y, z, w, h, d));
+}
+
+export function stampJumpPads(
+  group: THREE.Group,
+  mats: THREE.Material[],
+  geos: THREE.BufferGeometry[],
+  spots: Array<{ x: number; y: number; z: number }>,
+  radius = 1.08,
+) {
+  const map = jumpPadTex();
+  const mat = new THREE.MeshStandardMaterial({
+    map,
+    color: 0xffffff,
+    emissive: 0xfff0a8,
+    emissiveMap: map,
+    emissiveIntensity: 0.82,
+    roughness: 0.34,
+    metalness: 0.42,
+  });
+  mats.push(mat);
+  geos.push(instanceDiscs(group, mat, spots, radius).geo);
+}
+
+export function stampPortals(
+  group: THREE.Group,
+  mats: THREE.Material[],
+  geos: THREE.BufferGeometry[],
+  spots: Array<{ x: number; y: number; z: number }>,
+  radius = 1.12,
+): THREE.Mesh[] {
+  const map = portalTex();
+  const mat = new THREE.MeshBasicMaterial({
+    map,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+    fog: false,
+    depthWrite: false,
+  });
+  mats.push(mat);
+  const geo = new THREE.CircleGeometry(radius, 28);
+  geos.push(geo);
+  const discs: THREE.Mesh[] = [];
+  for (const spot of spots) {
+    const disc = new THREE.Mesh(geo, mat);
+    disc.position.set(spot.x, spot.y, spot.z);
+    disc.renderOrder = 2;
+    group.add(disc);
+    discs.push(disc);
+  }
+  return discs;
+}
+
+const CORE_TUBE = { x: 0, z: -42, y: -15.2, r: 4.05 };
+
+function punchRectHole(
+  fill: (x: number, z: number, w: number, d: number) => void,
+  cx: number,
+  cz: number,
+  holeR: number,
+  x: number,
+  z: number,
+  w: number,
+  d: number,
+) {
+  const x0 = x - w / 2;
+  const x1 = x + w / 2;
+  const z0 = z - d / 2;
+  const z1 = z + d / 2;
+  const hx0 = cx - holeR;
+  const hx1 = cx + holeR;
+  const hz0 = cz - holeR;
+  const hz1 = cz + holeR;
+  if (hx1 <= x0 || hx0 >= x1 || hz1 <= z0 || hz0 >= z1) {
+    fill(x, z, w, d);
+    return;
+  }
+  if (z0 < hz0) fill(x, (z0 + hz0) / 2, w, hz0 - z0);
+  if (z1 > hz1) fill(x, (hz1 + z1) / 2, w, z1 - hz1);
+  const midZ0 = Math.max(z0, hz0);
+  const midZ1 = Math.min(z1, hz1);
+  const midD = midZ1 - midZ0;
+  if (midD > 0.06) {
+    const midZ = (midZ0 + midZ1) / 2;
+    if (x0 < hx0) fill((x0 + hx0) / 2, midZ, hx0 - x0, midD);
+    if (x1 > hx1) fill((hx1 + x1) / 2, midZ, x1 - hx1, midD);
+  }
+}
+
+function canvasTex(draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void, w: number, h: number) {
+  if (typeof document === "undefined") return new THREE.Texture();
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  draw(c.getContext("2d")!, w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = isLoDevice() ? 2 : 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function chimueloWallTex() {
+  const mobile = isLoDevice();
+  return canvasTex((ctx, w, h) => {
+    ctx.fillStyle = "#07151c";
+    ctx.fillRect(0, 0, w, h);
+    const rim = ctx.createLinearGradient(0, 0, w, 0);
+    rim.addColorStop(0, "#1a6f68");
+    rim.addColorStop(0.5, "#9ffff2");
+    rim.addColorStop(1, "#1a6f68");
+    ctx.strokeStyle = rim;
+    ctx.lineWidth = 28;
+    ctx.strokeRect(22, 22, w - 44, h - 44);
+    ctx.strokeStyle = "#3ae8d2";
+    ctx.lineWidth = 8;
+    ctx.strokeRect(48, 48, w - 96, h - 96);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "#3ae8d2";
+    ctx.shadowBlur = 36;
+    ctx.fillStyle = "#f7fffc";
+    ctx.font = "800 210px Arial, Helvetica, sans-serif";
+    ctx.fillText("GRACIAS", w / 2, h * 0.36);
+    ctx.font = "800 248px Arial, Helvetica, sans-serif";
+    ctx.fillText("CHIMUELO", w / 2, h * 0.68);
+  }, mobile ? 1024 : 2048, mobile ? 384 : 768);
+}
+
+function respectFlagTex() {
+  const mobile = isLoDevice();
+  return canvasTex((ctx, w, h) => {
+    ctx.fillStyle = "#101114";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "#f4f4f1";
+    ctx.fillRect(0, h * 0.42, w, h * 0.14);
+    ctx.fillStyle = "#3ae8d2";
+    ctx.fillRect(0, h * 0.56, w, h * 0.035);
+    ctx.fillStyle = "#f4f4f1";
+    ctx.beginPath();
+    ctx.moveTo(w * 0.5, h * 0.14);
+    ctx.lineTo(w * 0.62, h * 0.24);
+    ctx.lineTo(w * 0.5, h * 0.34);
+    ctx.lineTo(w * 0.38, h * 0.24);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#3ae8d2";
+    ctx.lineWidth = 10;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+  }, mobile ? 256 : 512, mobile ? 384 : 768);
+}
+
+function hangRespectFlag(
+  group: THREE.Group,
+  geos: THREE.BufferGeometry[],
+  mats: THREE.Material[],
+  flagMat: THREE.Material,
+  x: number,
+  y: number,
+  z: number,
+  side: number,
+) {
+  const poleGeo = new THREE.CylinderGeometry(0.05, 0.06, 3.2, 8);
+  geos.push(poleGeo);
+  const poleMat = new THREE.MeshStandardMaterial({
+    color: 0xb8c4c2,
+    metalness: 0.72,
+    roughness: 0.28,
+    emissive: 0x1a3c38,
+    emissiveIntensity: 0.2,
+  });
+  mats.push(poleMat);
+  const pole = new THREE.Mesh(poleGeo, poleMat);
+  pole.position.set(x, y + 1.6, z);
+  pole.castShadow = false;
+  group.add(pole);
+  const armGeo = new THREE.BoxGeometry(1.18, 0.07, 0.07);
+  geos.push(armGeo);
+  const arm = new THREE.Mesh(armGeo, poleMat);
+  arm.position.set(x + side * 0.52, y + 3.12, z + 0.04);
+  group.add(arm);
+  const clothGeo = new THREE.PlaneGeometry(1.12, 1.78, 1, 6);
+  geos.push(clothGeo);
+  const cloth = new THREE.Mesh(clothGeo, flagMat);
+  cloth.position.set(x + side * 0.58, y + 2.18, z + 0.08);
+  cloth.rotation.z = side * 0.06;
+  cloth.castShadow = false;
+  group.add(cloth);
+}
+
+function buildCoreTube(
+  batch: BoxBatch,
+  solids: AABB[],
+  group: THREE.Group,
+  geos: THREE.BufferGeometry[],
+  mats: THREE.Material[],
+  metalMat: THREE.Material,
+  mossMat: THREE.Material,
+  metalWallMat: THREE.Material,
+  items: ItemPad[],
+  waypoints: { x: number; y: number; z: number }[],
+  hazards: HazardZone[],
+): { update: (now: number, dt: number) => void; dispose: () => void } {
+  const CX = CORE_TUBE.x;
+  const CZ = CORE_TUBE.z;
+  const CORE_Y = CORE_TUBE.y;
+  const crypt = -4.6;
+  const RISE = 0.36;
+  const TURNS = 3.05;
+  const STAIR_R = 2.32;
+  const TUBE_R = CORE_TUBE.r;
+  const CORE_R = 0.4;
+  const shaftH = -CORE_Y;
+  const STEPS = Math.ceil(shaftH / RISE);
+  const lite = isLoDevice();
+  const PIT_R = 3.15;
+  const PIT_Y = CORE_Y - 3.55;
+
+  geos.push(instanceCylinders(group, mossMat, [{ x: CX, y: 0.06, z: CZ }], TUBE_R + 0.08, TUBE_R + 1.05, 0.16, 36).geo);
+  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: 0.22, z: CZ }], TUBE_R - 0.18, TUBE_R + 0.18, 0.14, 36).geo);
+
+  const rimGeo = new THREE.TorusGeometry(TUBE_R + 0.06, 0.11, 12, 48);
+  geos.push(rimGeo);
+  const rimMat = new THREE.MeshStandardMaterial({
+    color: 0x9ffff2,
+    emissive: 0x3ae8d2,
+    emissiveIntensity: 1.55,
+    metalness: 0.6,
+    roughness: 0.14,
+    toneMapped: false,
+  });
+  mats.push(rimMat);
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.position.set(CX, 0.16, CZ);
+  rim.rotation.x = Math.PI / 2;
+  rim.castShadow = false;
+  group.add(rim);
+
+  for (let k = 0; k < (lite ? 3 : 6); k++) {
+    const y = CORE_Y + 0.55 + (k / (lite ? 2 : 5)) * (shaftH - 1.1);
+    geos.push(instanceCylinders(group, metalMat, [{ x: CX, y, z: CZ }], TUBE_R - 0.22, TUBE_R - 0.02, 0.09, lite ? 16 : 32).geo);
+  }
+
+  solids.push(boxAt(CX, CORE_Y, CZ, CORE_R * 2, shaftH, CORE_R * 2));
+  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: CORE_Y + shaftH / 2, z: CZ }], CORE_R + 0.08, CORE_R, shaftH, 20).geo);
+
+  const liningGeo = new THREE.CylinderGeometry(TUBE_R - 0.16, TUBE_R - 0.16, shaftH, lite ? 20 : 40, 1, true);
+  geos.push(liningGeo);
+  const lining = new THREE.Mesh(liningGeo, metalWallMat);
+  lining.position.set(CX, CORE_Y + shaftH / 2, CZ);
+  lining.castShadow = false;
+  group.add(lining);
+
+  const hullGeo = new THREE.CylinderGeometry(TUBE_R + 0.22, TUBE_R + 0.22, shaftH, lite ? 20 : 40, 1, true);
+  geos.push(hullGeo);
+  const hull = new THREE.Mesh(hullGeo, metalWallMat);
+  hull.position.set(CX, CORE_Y + shaftH / 2, CZ);
+  hull.castShadow = false;
+  group.add(hull);
+
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    addBox(
+      batch,
+      solids,
+      metalMat,
+      CX + Math.cos(a) * (TUBE_R - 0.28),
+      CORE_Y,
+      CZ + Math.sin(a) * (TUBE_R - 0.28),
+      0.12,
+      shaftH,
+      0.12,
+      false,
+    );
+  }
+
+  const wallSegs = lite ? 16 : 28;
+  const wallR = TUBE_R + 0.12;
+  const wallBox = 0.7;
+  const lowerH = crypt - CORE_Y;
+  for (let i = 0; i < wallSegs; i++) {
+    const a = (i / wallSegs) * Math.PI * 2;
+    const x = CX + Math.cos(a) * wallR;
+    const z = CZ + Math.sin(a) * wallR;
+    addBox(batch, solids, metalMat, x, CORE_Y, z, wallBox, lowerH, wallBox);
+    const northDoor = Math.sin(a) > 0.58;
+    if (!northDoor) addBox(batch, solids, metalMat, x, crypt, z, wallBox, -crypt, wallBox);
+  }
+  addBox(batch, solids, metalMat, CX, crypt - 0.1, CZ + TUBE_R - 0.55, 2.8, 0.12, 1.55);
+
+  const helix: THREE.Vector3[] = [];
+  const innerHelix: THREE.Vector3[] = [];
+  for (let i = 0; i < STEPS; i++) {
+    const t = i / Math.max(1, STEPS - 1);
+    const a = t * TURNS * Math.PI * 2;
+    const top = -i * RISE;
+    if (top < CORE_Y + 0.02) break;
+    const bottom = Math.max(CORE_Y, top - RISE);
+    const x = CX + Math.cos(a) * STAIR_R;
+    const z = CZ + Math.sin(a) * STAIR_R;
+    const tang = a + Math.PI / 2;
+    const along = 1.28;
+    const radial = 1.46;
+    const w = Math.max(0.84, Math.abs(Math.cos(tang)) * along + Math.abs(Math.cos(a)) * radial);
+    const d = Math.max(0.84, Math.abs(Math.sin(tang)) * along + Math.abs(Math.sin(a)) * radial);
+    addBox(batch, solids, metalMat, x, bottom, z, w, top - bottom, d);
+    helix.push(new THREE.Vector3(CX + Math.cos(a) * (STAIR_R + 0.7), top + 0.52, CZ + Math.sin(a) * (STAIR_R + 0.7)));
+    innerHelix.push(new THREE.Vector3(CX + Math.cos(a) * (STAIR_R - 0.72), top + 0.38, CZ + Math.sin(a) * (STAIR_R - 0.72)));
+    if (i % 3 === 0) waypoints.push({ x, y: top, z });
+  }
+
+  const railMat = new THREE.MeshStandardMaterial({
+    color: 0x9ffff2,
+    emissive: 0x3ae8d2,
+    emissiveIntensity: 1.15,
+    metalness: 0.55,
+    roughness: 0.18,
+    toneMapped: false,
+  });
+  mats.push(railMat);
+  if (!lite && helix.length > 4) {
+    const outerRail = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(helix), 120, 0.055, 6, false);
+    const innerRail = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(innerHelix), 120, 0.04, 5, false);
+    geos.push(outerRail, innerRail);
+    const outerMesh = new THREE.Mesh(outerRail, railMat);
+    const innerMesh = new THREE.Mesh(innerRail, railMat);
+    outerMesh.castShadow = innerMesh.castShadow = false;
+    group.add(outerMesh, innerMesh);
+  }
+
+  const hallR = 6.55;
+  punchRectHole(
+    (x, z, w, d) => addBox(batch, solids, metalMat, x, CORE_Y - 0.22, z, w, 0.22, d),
+    CX,
+    CZ,
+    PIT_R,
+    CX,
+    CZ,
+    hallR * 1.7,
+    hallR * 1.7,
+  );
+  const pitFloorTex = loadTex("/textures/surfaces/lava-floor.webp", 1, 1);
+  const pitFloorMat = new THREE.MeshLambertMaterial({
+    map: pitFloorTex,
+    color: 0xffffff,
+    emissive: 0xff4a18,
+    emissiveMap: pitFloorTex,
+    emissiveIntensity: 0.48,
+  });
+  mats.push(pitFloorMat);
+  const pitGeo = new THREE.CircleGeometry(PIT_R - 0.05, lite ? 18 : 24);
+  pitGeo.rotateX(-Math.PI / 2);
+  const pitUv = pitGeo.getAttribute("uv") as THREE.BufferAttribute;
+  const pitTiles = (PIT_R * 2) / 2.2;
+  for (let i = 0; i < pitUv.count; i++) pitUv.setXY(i, pitUv.getX(i) * pitTiles, pitUv.getY(i) * pitTiles);
+  const pit = new THREE.Mesh(pitGeo, pitFloorMat);
+  pit.position.set(CX, PIT_Y + 0.22, CZ);
+  pit.castShadow = false;
+  pit.receiveShadow = false;
+  group.add(pit);
+  geos.push(pitGeo);
+  const bladeMat = new THREE.MeshLambertMaterial({ color: 0xb7c0c8, emissive: 0xff3a12, emissiveIntensity: 0.34 });
+  mats.push(bladeMat);
+  const toothN = lite ? 5 : 8;
+  const toothGeo = new THREE.BoxGeometry(1.35, 0.16, 0.22);
+  const hubGeo = new THREE.CylinderGeometry(0.42, 0.55, 0.28, lite ? 8 : 10);
+  geos.push(toothGeo, hubGeo);
+  const makeRotor = (y: number, reach: number) => {
+    const rotor = new THREE.Group();
+    rotor.position.set(CX, y, CZ);
+    const hub = new THREE.Mesh(hubGeo, metalMat);
+    hub.castShadow = false;
+    rotor.add(hub);
+    for (let i = 0; i < toothN; i++) {
+      const a = (i / toothN) * Math.PI * 2;
+      const tooth = new THREE.Mesh(toothGeo, bladeMat);
+      tooth.position.set(Math.cos(a) * reach, 0, Math.sin(a) * reach);
+      tooth.rotation.y = -a;
+      tooth.castShadow = false;
+      rotor.add(tooth);
+    }
+    group.add(rotor);
+    return rotor;
+  };
+  const rotorLo = makeRotor(PIT_Y + 0.55, PIT_R * 0.72);
+  const rotorHi = makeRotor(PIT_Y + 1.45, PIT_R * 0.58);
+  const wellH = CORE_Y - PIT_Y;
+  const wellGeo = new THREE.CylinderGeometry(PIT_R, PIT_R, wellH, lite ? 16 : 24, 1, true);
+  const wellUv = wellGeo.getAttribute("uv") as THREE.BufferAttribute;
+  const around = (Math.PI * 2 * PIT_R) / 2.2;
+  const up = wellH / 2.2;
+  for (let i = 0; i < wellUv.count; i++) wellUv.setXY(i, (wellUv.getX(i) * around) / 4.2, (wellUv.getY(i) * up) / 7.2);
+  geos.push(wellGeo);
+  const well = new THREE.Mesh(wellGeo, metalWallMat);
+  well.position.set(CX, PIT_Y + wellH / 2, CZ);
+  well.castShadow = false;
+  group.add(well);
+  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: CORE_Y + 3.72, z: CZ }], TUBE_R + 0.2, hallR - 0.35, 0.18, 28).geo);
+
+  hazards.push({
+    x: CX,
+    y: PIT_Y + 0.35,
+    z: CZ,
+    radius: PIT_R - 0.15,
+    damage: 999,
+    color: 0xff3a12,
+    crush: true,
+  });
+
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    addBox(batch, solids, metalMat, CX + Math.cos(a) * hallR, CORE_Y, CZ + Math.sin(a) * hallR, 1.42, 3.7, 1.42);
+    addBox(
+      batch,
+      solids,
+      metalMat,
+      CX + Math.cos(a) * (hallR - 0.2),
+      CORE_Y + 2.2,
+      CZ + Math.sin(a) * (hallR - 0.2),
+      0.18,
+      0.18,
+      0.18,
+      false,
+    );
+  }
+
+  const wallZ = CZ - hallR + 0.62;
+  addBox(batch, solids, metalMat, CX, CORE_Y, wallZ, 8.2, 3.5, 0.4);
+  const signTex = chimueloWallTex();
+  const signMat = new THREE.MeshStandardMaterial({
+    map: signTex,
+    emissiveMap: signTex,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.9,
+    roughness: 0.3,
+    metalness: 0.16,
+    toneMapped: false,
+  });
+  mats.push(signMat);
+  const signGeo = new THREE.PlaneGeometry(7.2, 2.5);
+  geos.push(signGeo);
+  const sign = new THREE.Mesh(signGeo, signMat);
+  sign.position.set(CX, CORE_Y + 2.02, wallZ + 0.24);
+  sign.castShadow = false;
+  group.add(sign);
+
+  const flagTex = respectFlagTex();
+  const flagMat = new THREE.MeshStandardMaterial({
+    map: flagTex,
+    emissiveMap: flagTex,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.22,
+    roughness: 0.55,
+    metalness: 0.08,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  mats.push(flagMat);
+  hangRespectFlag(group, geos, mats, flagMat, CX - 3.5, CORE_Y, wallZ + 0.18, -1);
+  hangRespectFlag(group, geos, mats, flagMat, CX + 3.5, CORE_Y, wallZ + 0.18, 1);
+
+  const plaqueL = new THREE.PointLight(0xe8fff8, 1.7, 9, 1.55);
+  plaqueL.position.set(CX, CORE_Y + 2.35, wallZ + 2.15);
+  plaqueL.castShadow = false;
+  group.add(plaqueL);
+  const pitL = new THREE.PointLight(0xff4a18, 2.8, 11, 1.3);
+  pitL.position.set(CX, PIT_Y + 1.35, CZ);
+  pitL.castShadow = false;
+  group.add(pitL);
+  if (!lite) {
+    const shaftL = new THREE.PointLight(0xc8d0d8, 1.4, 12, 1.5);
+    shaftL.position.set(CX, CORE_Y + shaftH * 0.55, CZ);
+    shaftL.castShadow = false;
+    group.add(shaftL);
+    const mouthL = new THREE.PointLight(0x5ae8d8, 1.6, 8, 1.6);
+    mouthL.position.set(CX, 1.4, CZ);
+    mouthL.castShadow = false;
+    group.add(mouthL);
+  }
+
+  const smokeN = lite ? 12 : 22;
+  const smokePos = new Float32Array(smokeN * 3);
+  const smokeCol = new Float32Array(smokeN * 3);
+  type Puff = { x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; max: number; heat: number };
+  const puffs: Puff[] = [];
+  const seedPuff = (p: Puff) => {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * (PIT_R - 0.35);
+    p.x = CX + Math.cos(a) * r;
+    p.z = CZ + Math.sin(a) * r;
+    p.y = PIT_Y + 0.28 + Math.random() * 0.35;
+    p.vx = (Math.random() - 0.5) * 0.45;
+    p.vy = 0.85 + Math.random() * 1.25;
+    p.vz = (Math.random() - 0.5) * 0.45;
+    p.max = 1.8 + Math.random() * 2.2;
+    p.life = Math.random() * p.max;
+    p.heat = Math.random();
+  };
+  for (let i = 0; i < smokeN; i++) {
+    const p: Puff = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, heat: 0 };
+    seedPuff(p);
+    puffs.push(p);
+  }
+  const smokeGeo = new THREE.BufferGeometry();
+  const smokePosAttr = new THREE.BufferAttribute(smokePos, 3).setUsage(THREE.DynamicDrawUsage);
+  const smokeColAttr = new THREE.BufferAttribute(smokeCol, 3).setUsage(THREE.DynamicDrawUsage);
+  smokeGeo.setAttribute("position", smokePosAttr);
+  smokeGeo.setAttribute("color", smokeColAttr);
+  smokeGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(CX, PIT_Y + 4, CZ), 18);
+  geos.push(smokeGeo);
+  const smokeMap = smokePuffTex();
+  const smokeMat = new THREE.PointsMaterial({
+    map: smokeMap,
+    color: 0xffffff,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.7,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+    size: 2.8,
+    sizeAttenuation: true,
+    fog: true,
+  });
+  mats.push(smokeMat);
+  const smoke = new THREE.Points(smokeGeo, smokeMat);
+  smoke.frustumCulled = false;
+  smoke.renderOrder = 6;
+  group.add(smoke);
+
+  items.push(
+    { id: "core-ion", kind: "ion", x: CX + 4.4, y: CORE_Y + 0.55, z: CZ + 1.7, respawn: 42 },
+    { id: "core-armor", kind: "armor", x: CX - 4.45, y: CORE_Y + 0.55, z: CZ - 1.35, respawn: 28 },
+    { id: "core-hp", kind: "health", x: CX + 0.2, y: CORE_Y + 0.55, z: CZ - 4.6, respawn: 22 },
+  );
+  waypoints.push({ x: CX + 4.2, y: CORE_Y, z: CZ }, { x: CX, y: 0, z: CZ }, { x: CX, y: crypt, z: CZ + TUBE_R + 0.6 });
+
+  return {
+    update: (now, dt) => {
+      pitFloorMat.emissiveIntensity = 0.36 + 0.16 * (0.5 + 0.5 * Math.sin(now * 2.2));
+      bladeMat.emissiveIntensity = 0.22 + 0.2 * (0.5 + 0.5 * Math.sin(now * 16));
+      rotorLo.rotation.y = now * 3.6;
+      rotorHi.rotation.y = -now * 4.8;
+      pitL.intensity = 2.1 + 0.35 * Math.sin(now * 2.4);
+      const pulse = 0.5 + 0.5 * Math.sin(now * 2.1);
+      for (let i = 0; i < puffs.length; i++) {
+        const p = puffs[i]!;
+        p.life += dt;
+        if (p.life >= p.max) seedPuff(p);
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.z += p.vz * dt;
+        p.vx += Math.sin(now * 0.7 + i) * 0.12 * dt;
+        p.vz += Math.cos(now * 0.55 + i) * 0.12 * dt;
+        const t = p.life / p.max;
+        const fade = t < 0.16 ? t / 0.16 : 1 - (t - 0.16) / 0.84;
+        const a = Math.max(0, fade);
+        smokePos[i * 3] = p.x;
+        smokePos[i * 3 + 1] = p.y;
+        smokePos[i * 3 + 2] = p.z;
+        smokeCol[i * 3] = (0.22 + p.heat * 0.55) * a;
+        smokeCol[i * 3 + 1] = (0.16 + p.heat * 0.18) * a;
+        smokeCol[i * 3 + 2] = 0.12 * a;
+      }
+      smokePosAttr.needsUpdate = true;
+      smokeColAttr.needsUpdate = true;
+      smokeMat.opacity = 0.55 + 0.16 * pulse;
+    },
+    dispose: () => {},
+  };
 }
 
 export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): ArenaData {
@@ -55,6 +630,15 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     emissive: 0x2ee0c8,
     emissiveMap: maps.floor,
     emissiveIntensity: 0.22,
+  });
+  const perimeterWallMat = new THREE.MeshStandardMaterial({
+    map: maps.wall,
+    color: 0xffffff,
+    roughness: 0.58,
+    metalness: 0.52,
+    emissive: 0x3ad4e8,
+    emissiveMap: maps.wall,
+    emissiveIntensity: 0.26,
   });
   const plateMat = new THREE.MeshLambertMaterial({
     map: maps.plate,
@@ -85,6 +669,35 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     emissiveIntensity: 1.6,
     roughness: 0.28,
     metalness: 0.45,
+  });
+  const portalRingTex = loadTex("/textures/rings/pozo-main-ring-v1.webp", 4, 1.15);
+  const portalRingMat = new THREE.MeshStandardMaterial({
+    map: portalRingTex,
+    color: 0xffffff,
+    emissive: 0x2ee8dc,
+    emissiveMap: portalRingTex,
+    emissiveIntensity: 0.58,
+    roughness: 0.36,
+    metalness: 0.62,
+  });
+  const ringDeckMat = new THREE.MeshLambertMaterial({
+    map: portalRingTex,
+    color: 0xffffff,
+    emissive: 0x1aa8a0,
+    emissiveMap: portalRingTex,
+    emissiveIntensity: 0.38,
+  });
+  const ringTopTex = loadTex("/textures/rings/pozo-main-ring-v1.webp", 1, 1);
+  const ringTopMat = new THREE.MeshLambertMaterial({
+    map: ringTopTex,
+    color: 0xffffff,
+    emissive: 0x1aa8a0,
+    emissiveMap: ringTopTex,
+    emissiveIntensity: 0.42,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
   const emberMat = new THREE.MeshStandardMaterial({
     color: 0x3a1812,
@@ -131,14 +744,34 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     map: maps.armor,
     color: 0xffffff,
   });
+  const tubeMetalTex = loadPozoSurface("industrial-teal", 2.4, 2.4);
+  const tubeMetalWallTex = loadPozoSurface("industrial-teal", 4.2, 7.2);
+  const tubeMossTex = loadPozoSurface("alien-forest", 2.6, 2.6);
+  const tubeMetalMat = new THREE.MeshLambertMaterial({
+    map: tubeMetalTex,
+    color: 0xc8ccd2,
+  });
+  const tubeMetalWallMat = new THREE.MeshLambertMaterial({
+    map: tubeMetalWallTex,
+    color: 0xc2c6cc,
+    side: THREE.DoubleSide,
+  });
+  const tubeMossMat = new THREE.MeshLambertMaterial({
+    map: tubeMossTex,
+    color: 0xffffff,
+  });
   mats.push(
     floorMat,
+    perimeterWallMat,
     plateMat,
     beamMat,
     pipeMat,
     hazardMat,
     consoleMat,
     ionMat,
+    portalRingMat,
+    ringDeckMat,
+    ringTopMat,
     emberMat,
     voxelMat,
     padMat,
@@ -146,6 +779,9 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     skullMat,
     ruinMat,
     armorMat,
+    tubeMetalMat,
+    tubeMetalWallMat,
+    tubeMossMat,
   );
 
   const lights = createArenaLights(
@@ -161,6 +797,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
       ember: emberMat,
     },
     renderer,
+    "pozo-cycle",
   );
 
   const WALL_H = 11;
@@ -182,10 +819,10 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   });
   mats.push(boneMat, archMat);
   buildCatacombs(batch, solids, group, geos, mats, floorMat, boneMat, skullMat, emberMat, ARENA_SIZE, archMat);
-  addBox(batch, solids, ruinMat, 0, 0, -ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
-  addBox(batch, solids, ruinMat, 0, 0, ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
-  addBox(batch, solids, ruinMat, -ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
-  addBox(batch, solids, ruinMat, ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
+  addBox(batch, solids, perimeterWallMat, 0, 0, -ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
+  addBox(batch, solids, perimeterWallMat, 0, 0, ARENA_HALF, ARENA_SIZE, WALL_H, 1.4);
+  addBox(batch, solids, perimeterWallMat, -ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
+  addBox(batch, solids, perimeterWallMat, ARENA_HALF, 0, 0, 1.4, WALL_H, ARENA_SIZE);
 
   const runeDecals = [
     { x: 0, y: 5.2, z: -54.26, ry: 0, s: 3.2 },
@@ -207,7 +844,6 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   addBox(batch, solids, ionMat, -54.05, 6.2, 0, 0.18, 0.1, 108, false);
   addBox(batch, solids, ionMat, 54.05, 6.2, 0, 0.18, 0.1, 108, false);
   addBox(batch, solids, consoleMat, 0, 0, 0, 7.2, 1.35, 7.2);
-  addBox(batch, solids, emberMat, 0, 1.35, 0, 7.2, 0.08, 7.2, false);
   const altarCorners = [
     [-3.6, -3.6],
     [3.6, -3.6],
@@ -283,12 +919,10 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   addBox(batch, solids, hazardMat, 0, 3.42, 18.2, 16, 0.06, 4.4, false);
   addBox(batch, solids, plateMat, -18.4, 3.15, 0, 4.2, 0.28, 10);
   addBox(batch, solids, plateMat, 18.4, 3.15, 0, 4.2, 0.28, 10);
-  addBox(batch, solids, armorMat, 0, 3.15, -36, 28, 0.3, 7);
-  addBox(batch, solids, armorMat, 0, 3.15, 36, 28, 0.3, 7);
-  addBox(batch, solids, armorMat, -36, 3.15, 0, 7, 0.3, 22);
-  addBox(batch, solids, armorMat, 36, 3.15, 0, 7, 0.3, 22);
-  addBox(batch, solids, hazardMat, 0, 3.46, -36, 28, 0.06, 7, false);
-  addBox(batch, solids, hazardMat, 0, 3.46, 36, 28, 0.06, 7, false);
+  addBox(batch, solids, ringDeckMat, 0, 3.15, -36, 28, 0.3, 7);
+  addBox(batch, solids, ringDeckMat, 0, 3.15, 36, 28, 0.3, 7);
+  addBox(batch, solids, ringDeckMat, -36, 3.15, 0, 7, 0.3, 22);
+  addBox(batch, solids, ringDeckMat, 36, 3.15, 0, 7, 0.3, 22);
   addBox(batch, solids, plateMat, 0, 3.15, -27, 4.4, 0.28, 14);
   addBox(batch, solids, plateMat, 0, 3.15, 27, 4.4, 0.28, 14);
   addBox(batch, solids, plateMat, -27, 3.15, 0, 14, 0.28, 4.4);
@@ -439,6 +1073,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
 
   const pads: JumpPad[] = [];
   const teleports: TeleportGate[] = [];
+  const hazards: HazardZone[] = [];
   const padSpecs: Array<{ x: number; z: number; vx: number; vy: number; vz: number; lit?: boolean }> = [
     { x: -17, z: -17, vx: 8, vy: 13.5, vz: 8, lit: true },
     { x: 17, z: -17, vx: -8, vy: 13.5, vz: 8, lit: true },
@@ -452,6 +1087,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     pads.push({ aabb: boxAt(p.x, 0, p.z, 2.1, 1.2, 2.1), vx: p.vx, vy: p.vy, vz: p.vz });
   }
   geos.push(instanceCylinders(group, padMat, padSpecs.map((p) => ({ x: p.x, y: 0.1, z: p.z })), 1.05, 1.15, 0.16).geo);
+  stampJumpPads(group, mats, geos, padSpecs.map((p) => ({ x: p.x, y: 0.2, z: p.z })), 1.08);
 
   const portalRing = new THREE.TorusGeometry(1.15, 0.09, 8, 22);
   const portalBase = new THREE.CylinderGeometry(1.2, 1.32, 0.14, 16);
@@ -470,10 +1106,10 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     });
     const base = new THREE.Mesh(portalBase, padMat);
     base.position.set(x, 0.08, z);
-    const ring = new THREE.Mesh(portalRing, ionMat);
+    const ring = new THREE.Mesh(portalRing, portalRingMat);
     ring.position.set(x, 1.15, z);
     ring.rotation.x = Math.PI / 2;
-    const mark = new THREE.Mesh(skyRing, ionMat);
+    const mark = new THREE.Mesh(skyRing, portalRingMat);
     mark.position.set(targetX, 26.4, targetZ);
     mark.rotation.x = Math.PI / 2;
     group.add(base, ring, mark);
@@ -481,6 +1117,12 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   };
   portal(-26, 20, 12, -18);
   portal(26, -20, -12, 18);
+  const portalDiscs = stampPortals(group, mats, geos, [
+    { x: -26, y: 1.28, z: 20 },
+    { x: 26, y: 1.28, z: -20 },
+    { x: 12, y: 26.55, z: -18 },
+    { x: -12, y: 26.55, z: 18 },
+  ], 1.22);
 
   const items: ItemPad[] = [
     { id: "h1", kind: "health", x: -6, y: 0.2, z: 0, respawn: 12 },
@@ -496,8 +1138,13 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     { id: "w2", kind: "torpedo", x: 6, y: 3.55, z: -18.2, respawn: 22 },
     { id: "w3", kind: "lance", x: 0, y: 3.55, z: -36, respawn: 28 },
     { id: "w4", kind: "ion", x: -36, y: 3.55, z: 0, respawn: 20 },
+    { id: "w5", kind: "fauces", x: 36, y: 3.55, z: 0, respawn: 24 },
+    { id: "w-bate", kind: "bate", x: 11, y: 0.25, z: 8, respawn: 20 },
+    { id: "w-martillo", kind: "martillo", x: 0, y: 3.55, z: 36, respawn: 26 },
     { id: "p1", kind: "rush", x: -14, y: 0.28, z: 8, respawn: 22 },
     { id: "p2", kind: "blink", x: 14, y: 0.28, z: -8, respawn: 26 },
+    { id: "p3", kind: "leap", x: 22, y: 0.28, z: 12, respawn: 24 },
+    { id: "p4", kind: "volt", x: -22, y: 0.28, z: -12, respawn: 24 },
   ];
 
   const spawns: Spawn[] = [
@@ -513,6 +1160,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     { x: 36, y: 3.43, z: 8, yaw: -Math.PI / 2 },
     { x: -8, y: 3.43, z: -36, yaw: 0 },
     { x: 8, y: 3.43, z: 36, yaw: Math.PI },
+    { x: CORE_TUBE.x + 3.2, y: CORE_TUBE.y, z: CORE_TUBE.z + 0.5, yaw: Math.PI },
   ];
 
   const waypoints = [
@@ -551,7 +1199,23 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     { x: -16, y: -4.6, z: -16 },
     { x: 16, y: -4.6, z: 16 },
     { x: 0, y: -9, z: 22 },
+    { x: CORE_TUBE.x, y: 0, z: CORE_TUBE.z },
+    { x: CORE_TUBE.x, y: CORE_TUBE.y, z: CORE_TUBE.z },
   ];
+
+  const tubeFx = buildCoreTube(
+    batch,
+    solids,
+    group,
+    geos,
+    mats,
+    tubeMetalMat,
+    tubeMossMat,
+    tubeMetalWallMat,
+    items,
+    waypoints,
+    hazards,
+  );
 
   const addWire = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, w = 0.36) => {
     const dx = x1 - x0;
@@ -570,40 +1234,117 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   addWire(8, 0.2, -40, 24, 8.7, -40);
   addWire(-24, 8.7, -40, 24, 8.7, -40, 0.7);
 
-  const stars = loadSkyTex("/textures/sky-stars.jpg");
-  const skyGeo = new THREE.SphereGeometry(240, 32, 20);
-  const skyMat = new THREE.MeshBasicMaterial({
-    map: stars,
+  const skyPaths = [
+    "/textures/space/pozo-cycle-start-v1.webp",
+    "/textures/space/pozo-cycle-mid-v1.webp",
+    "/textures/space/pozo-cycle-end-v1.webp",
+  ];
+  const skyTextures = skyPaths.map((path) => loadSkyTex(path, false));
+  const skyGeo = skySphereGeo();
+  const skyMaterials = skyTextures.map((map, index) => new THREE.MeshBasicMaterial({
+    map,
     side: THREE.BackSide,
     fog: false,
+    transparent: true,
+    opacity: index === 0 ? 1 : 0,
     depthWrite: false,
     toneMapped: false,
+  }));
+  const skyLayers = skyMaterials.map((material, index) => {
+    const mesh = new THREE.Mesh(skyGeo, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -20 + index;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.visible = index === 0;
+    scene.add(mesh);
+    return mesh;
   });
-  mats.push(skyMat);
-  const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.frustumCulled = false;
-  sky.renderOrder = -20;
-  sky.castShadow = false;
-  sky.receiveShadow = false;
-  scene.add(sky);
+  mats.push(...skyMaterials);
 
   batch.build(group);
+  geos.push(
+    stampDecks(
+      group,
+      ringTopMat,
+      [
+        { x: 0, y: 1.37, z: 0, w: 9.2, d: 9.2 },
+        { x: 0, y: 3.47, z: -36, w: 28, d: 7 },
+        { x: 0, y: 3.47, z: 36, w: 28, d: 7 },
+        { x: -36, y: 3.47, z: 0, w: 7, d: 22 },
+        { x: 36, y: 3.47, z: 0, w: 7, d: 22 },
+      ],
+      1.85,
+    ).geo,
+  );
   geos.push(skyGeo);
 
+  const skyLo = isLoDevice();
+  let cycleStartedAt: number | null = null;
+  const startCycle = (epochMs: number) => {
+    const elapsed = Math.max(0, (Date.now() - epochMs) / 1000);
+    cycleStartedAt = performance.now() / 1000 - elapsed;
+  };
+  const updateSky = (now: number) => {
+    const elapsed = cycleStartedAt === null ? 0 : Math.max(0, now - cycleStartedAt);
+    const progress = Math.min(1, elapsed / ROUND_SECONDS);
+    let base = 0;
+    let overlay = 0;
+    let blend = 0;
+    if (progress >= 0.42 && progress < 0.56) {
+      overlay = 1;
+      blend = THREE.MathUtils.smoothstep(progress, 0.42, 0.56);
+    } else if (progress >= 0.56 && progress < 0.66) {
+      base = overlay = 1;
+    } else if (progress >= 0.66 && progress < 0.84) {
+      base = 1;
+      overlay = 2;
+      blend = THREE.MathUtils.smoothstep(progress, 0.66, 0.84);
+    } else if (progress >= 0.84) {
+      base = overlay = 2;
+    }
+    if (skyLo && overlay !== base) {
+      if (blend >= 0.5) base = overlay;
+      overlay = base;
+      blend = 0;
+    }
+    for (let i = 0; i < skyLayers.length; i++) {
+      const isBase = i === base;
+      const isOverlay = i === overlay && overlay !== base;
+      skyLayers[i]!.visible = isBase || isOverlay;
+      skyMaterials[i]!.opacity = isBase ? 1 : isOverlay ? blend : 0;
+    }
+    lights.setTimeOfDay(progress);
+  };
+
   scene.add(group);
+  const pozoCar = mountPozoCar(group, solids);
 
   return {
     group,
     solids,
     pads,
     teleports,
+    hazards,
     items,
     spawns,
     waypoints,
     lights,
+    update: (now, dt = 1 / 60) => {
+      for (let i = 0; i < portalDiscs.length; i++) {
+        portalDiscs[i]!.rotation.y = now * (i % 2 ? -0.55 : 0.55);
+      }
+      tubeFx.update(now, dt);
+      pozoCar.update(now, dt);
+      updateSky(now);
+    },
+    startCycle,
+    killY: CORE_TUBE.y - 6.4,
     dispose: () => {
+      pozoCar.dispose();
+      tubeFx.dispose();
       scene.remove(group);
-      scene.remove(sky);
+      for (const layer of skyLayers) scene.remove(layer);
       lights.dispose();
       batch.dispose();
       group.traverse((obj) => {
@@ -611,6 +1352,10 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
       });
       for (const g of geos) g.dispose();
       for (const m of mats) m.dispose();
+      for (let i = 0; i < skyTextures.length; i++) {
+        skyTextures[i]!.dispose();
+        THREE.Cache.remove(skyPaths[i]!);
+      }
     },
   };
 }
@@ -631,16 +1376,15 @@ function buildCatacombs(
   const half = arenaSize / 2;
   const lip = 2.7;
   const shafts = [
-    { x: 0, z: -42, along: "z" as const, dir: -1 },
     { x: 0, z: 42, along: "z" as const, dir: 1 },
     { x: -42, z: 0, along: "x" as const, dir: -1 },
     { x: 42, z: 0, along: "x" as const, dir: 1 },
   ];
   const bands: Array<[number, number, number, number]> = [
-    [-half, -45.6, -half, half],
-    [-45.6, -38.4, -half, -lip],
-    [-45.6, -38.4, lip, half],
-    [-38.4, -lip, -half, half],
+    [-half, -46.4, -half, half],
+    [-46.4, -37.6, -half, -4.35],
+    [-46.4, -37.6, 4.35, half],
+    [-37.6, -lip, -half, half],
     [-lip, lip, -half, -45.6],
     [-lip, lip, -38.4, 38.4],
     [-lip, lip, 45.6, half],
@@ -667,8 +1411,8 @@ function buildCatacombs(
   const cryptFloor = (x: number, z: number, w: number, d: number) => {
     addBox(batch, solids, boneMat, x, crypt - 1.1, z, w, 1.1, d);
   };
-  cryptFloor(0, -19, 96, 58);
   cryptFloor(0, 38, 96, 20);
+  punchRectHole(cryptFloor, CORE_TUBE.x, CORE_TUBE.z, 4.9, 0, -19, 96, 58);
   cryptFloor(-24.8, 14, 46.4, 8);
   cryptFloor(24.8, 14, 46.4, 8);
   cryptFloor(0, 19.025, 96, 2.05);
@@ -767,10 +1511,12 @@ function buildCatacombs(
       const lz = s.along === "z" ? mouth.z : mouth.z + side * 1.15;
       addBox(batch, solids, redMat, lx, 0.15, lz, 0.16, 0.22, 0.16, false);
     }
-    const lamp = new THREE.PointLight(0xff2a2a, 2.2, 8, 1.8);
-    lamp.position.set(mouth.x, 0.8, mouth.z);
-    lamp.castShadow = false;
-    group.add(lamp);
+    if (!isLoDevice()) {
+      const lamp = new THREE.PointLight(0xff2a2a, 2.2, 8, 1.8);
+      lamp.position.set(mouth.x, 0.8, mouth.z);
+      lamp.castShadow = false;
+      group.add(lamp);
+    }
     const foot = s.along === "z"
       ? { x: s.x, z: s.z + s.dir * 2.2 }
       : { x: s.x + s.dir * 2.2, z: s.z };
@@ -796,22 +1542,27 @@ function buildCatacombs(
     toneMapped: false,
   });
   mats.push(sunMat);
+  const liteCrypt = isLoDevice();
   for (const z of [16.2, 20.2, 24.2]) {
     addBox(batch, solids, sunMat, 0, -8.9, z, 0.16, 8.7, 0.16, false);
-    const shaft = new THREE.PointLight(0xffc070, 2.6, 9, 1.4);
-    shaft.position.set(0, deep + 1.6, z);
-    shaft.castShadow = false;
-    group.add(shaft);
+    if (!liteCrypt) {
+      const shaft = new THREE.PointLight(0xffc070, 2.6, 9, 1.4);
+      shaft.position.set(0, deep + 1.6, z);
+      shaft.castShadow = false;
+      group.add(shaft);
+    }
   }
 
   for (const [x, z] of candles) {
     addBox(batch, solids, emberMat, x, crypt, z, 0.12, 0.28, 0.12, false);
   }
-  for (const [x, z] of [[0, 0], [0, 22], [0, -22]] as const) {
-    const lamp = new THREE.PointLight(0xffb060, 1.5, 14, 1.7);
-    lamp.position.set(x, crypt + 1.2, z);
-    lamp.castShadow = false;
-    group.add(lamp);
+  if (!liteCrypt) {
+    for (const [x, z] of [[0, 0], [0, 22], [0, -22]] as const) {
+      const lamp = new THREE.PointLight(0xffb060, 1.5, 14, 1.7);
+      lamp.position.set(x, crypt + 1.2, z);
+      lamp.castShadow = false;
+      group.add(lamp);
+    }
   }
 }
 
@@ -821,101 +1572,64 @@ export function makeItemMesh(kind: ItemPad["kind"]): THREE.Group {
   const g = new THREE.Group();
   let color = 0x3ccf7a;
   if (kind === "mega") color = 0x7dffb2;
+  else if (kind === "health" || kind === "rush") color = 0xffffff;
   else if (kind === "armor") color = 0x5aa8ff;
   else if (kind === "ammo") color = 0xe8c36a;
   else if (kind === "scatter") color = 0xe24a2b;
   else if (kind === "torpedo") color = 0xff7a3a;
   else if (kind === "lance") color = 0x2ee0c8;
   else if (kind === "ion") color = 0x5aa8ff;
+  else if (kind === "fauces") color = 0xff8a3a;
+  else if (kind === "knife") color = 0xd5dbe3;
+  else if (kind === "bate") color = 0xc4843a;
+  else if (kind === "martillo") color = 0xb7c0c8;
   else if (kind === "pulse") color = 0xe8c36a;
   else if (isPower(kind)) color = POWER_META[kind].color;
-  const crateStyle = kind === "armor"
-    ? "armor"
+  const isCrate = kind === "armor" || kind === "ammo";
+  const pickupMap = kind === "armor"
+    ? loadIconTex("/textures/pickups/armor-crate.jpg")
     : kind === "ammo"
-      ? "ammo"
-      : kind === "pulse" || kind === "scatter" || kind === "torpedo" || kind === "lance" || kind === "ion"
-        ? "weapon"
-        : null;
+      ? loadIconTex("/textures/pickups/ammo-crate.jpg")
+      : pickupTexture(kind);
   const mat = new THREE.MeshStandardMaterial({
-    color,
-    emissive: color,
-    emissiveIntensity: kind === "health" || kind === "rush" ? 1.55 : isPower(kind) ? 1.1 : 0.7,
-    roughness: kind === "health" || kind === "rush" ? 0.38 : 0.28,
-    metalness: kind === "health" || kind === "rush" ? 0.56 : 0.35,
-    map: kind === "health" || kind === "rush" ? pickupTexture(kind) : crateStyle ? supplyCrateTexture(crateStyle) : null,
+    color: 0xffffff,
+    emissive: kind === "health" || kind === "mega" ? 0x7edc6a : kind === "rush" || kind === "leap" ? 0xffc44d : isCrate ? (kind === "armor" ? 0x3aa8ff : 0xe8b24a) : color,
+    emissiveIntensity: isCrate ? 0.34 : 0.92,
+    roughness: isCrate ? 0.46 : 0.34,
+    metalness: isCrate ? 0.38 : 0.46,
+    map: pickupMap,
+    emissiveMap: pickupMap,
+    toneMapped: !isCrate,
   });
-  if (kind === "health" || kind === "mega") {
-    if (kind === "health") {
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.72, 0.32), mat);
-      const a = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.16, 0.12), mat);
-      a.position.z = 0.18;
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.76, 0.12), mat);
-      b.position.z = 0.18;
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.045, 6, 12), mat);
-      rim.rotation.x = Math.PI / 2;
-      rim.position.z = 0.17;
-      g.add(body, a, b, rim);
+  if (isCrate) {
+    if (kind === "armor") {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.4, 0.46), mat);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.1, 0.52), mat);
+      lid.position.y = 0.25;
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), mat);
+      core.position.y = 0.33;
+      g.add(body, lid, core);
     } else {
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.52, 0.42), mat);
-      const a = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.13, 0.12), mat);
-      const b = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.5, 0.12), mat);
-      a.position.z = b.position.z = 0.24;
-      g.add(body, a, b);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.38, 0.48), mat);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.09, 0.54), mat);
+      lid.position.y = 0.24;
+      for (const x of [-0.16, 0, 0.16]) {
+        const cell = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.23, 6), mat);
+        cell.position.set(x, 0.31, 0);
+        g.add(cell);
+      }
+      g.add(body, lid);
     }
-  } else if (kind === "armor") {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.4, 0.46), mat);
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.1, 0.52), mat);
-    lid.position.y = 0.25;
-    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), mat);
-    core.position.y = 0.33;
-    g.add(body, lid, core);
-  } else if (kind === "ammo") {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.38, 0.48), mat);
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.09, 0.54), mat);
-    lid.position.y = 0.24;
-    for (const x of [-0.16, 0, 0.16]) {
-      const cell = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.23, 6), mat);
-      cell.position.set(x, 0.31, 0);
-      g.add(cell);
-    }
-    g.add(body, lid);
-  } else if (kind === "rush") {
-    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.38, 0.68, 8), mat);
-    core.rotation.z = Math.PI / 2;
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.32, 6), mat);
-    nose.rotation.z = -Math.PI / 2;
-    nose.position.x = 0.42;
-    const finA = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.5), mat);
-    const finB = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.12), mat);
-    finA.position.x = finB.position.x = -0.08;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.055, 6, 16), mat);
-    ring.rotation.x = Math.PI / 2;
-    const ring2 = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.035, 6, 14), mat);
-    ring2.rotation.x = Math.PI / 2;
-    ring2.position.x = -0.14;
-    g.add(core, nose, finA, finB, ring, ring2);
-  } else if (kind === "blink") {
-    g.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.28), mat));
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.035, 6, 14), mat);
-    ring.rotation.x = Math.PI / 2;
-    g.add(ring);
-  } else if (kind === "volt") {
-    const a = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.48, 0.1), mat);
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.1), mat);
-    b.position.y = 0.06;
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.26, 0.1), mat);
-    c.position.set(0.12, -0.1, 0);
-    g.add(a, b, c);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.04, 6, 14), mat);
-    ring.rotation.x = Math.PI / 2;
-    g.add(ring);
   } else {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.34, 0.62), mat);
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.1, 0.68), mat);
-    lid.position.y = 0.22;
-    const seal = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.16, 0.07), mat);
-    seal.position.set(0, 0.04, 0.35);
-    g.add(body, lid, seal);
+    const tall = kind === "lance" || kind === "torpedo";
+    const wide = kind === "pulse" || kind === "scatter" || kind === "fauces";
+    const pw = tall ? 0.58 : wide ? 0.98 : 0.86;
+    const ph = tall ? 1.12 : wide ? 0.62 : 0.86;
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, 0.08), mat);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(Math.max(pw, ph) * 0.52, 0.04, 6, 14), mat);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.z = 0.02;
+    g.add(plate, rim);
   }
   const scanRing = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.032, 6, 16), mat);
   scanRing.rotation.x = Math.PI / 2;
@@ -923,6 +1637,8 @@ export function makeItemMesh(kind: ItemPad["kind"]): THREE.Group {
   g.add(scanRing);
   g.userData.pickupMat = mat;
   g.userData.featuredPickup = true;
+  g.userData.flatPickup = !isCrate;
+  g.userData.cratePickup = isCrate;
   bakeMeshes(g, mat);
   return g;
 }
