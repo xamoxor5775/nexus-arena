@@ -8,6 +8,14 @@ import appCss from "../styles.css?url";
 
 const APP_NAME = "NEXUS ARENA";
 const APP_URL = "https://nexusarena.cl/";
+// Google tag (gtag.js) for Google Ads, rendered in <head> on every route.
+const GOOGLE_TAG_ID = "AW-18483322714";
+const GOOGLE_TAG_INIT = `
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', '${GOOGLE_TAG_ID}');
+`;
 const APP_DESC =
   "FPS deathmatch en el navegador. Acceso 30 días por $1.000 CLP. Cinco armas, bots letales y arena industrial. Pagas con Flow y entras sin instalar.";
 
@@ -56,6 +64,9 @@ function RootShell() {
   return (
     <html lang="es-CL" suppressHydrationWarning>
       <head>
+        {/* Google tag (gtag.js) */}
+        <script async src={`https://www.googletagmanager.com/gtag/js?id=${GOOGLE_TAG_ID}`} />
+        <script dangerouslySetInnerHTML={{ __html: GOOGLE_TAG_INIT }} />
         <HeadContent />
       </head>
       <body>
