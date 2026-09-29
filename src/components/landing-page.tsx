@@ -3,6 +3,7 @@ import { ArrowRight, Crosshair, Gamepad2, ShieldCheck, Volume2, VolumeX, Zap } f
 import type { ReactNode } from "react";
 import { debugSpool } from "@/lib/debug-spool";
 import { trackBeginCheckout, trackEnterArena, trackPurchase } from "@/lib/google-ads";
+import landingVideoCss from "./landing-video.css?url";
 
 export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }) {
   const [email, setEmail] = useState("");
@@ -253,10 +254,7 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
           )}
           <p className="landing-demo-note">Dentro de la arena puedes cambiar temas con N y M · usa los MP3 de /media.</p>
         </div>
-        <div className="landing-art landing-video-art" aria-label="Vista previa en video de Nexus Arena">
-          <video className="landing-video" src="/media/nexus-arena-demo.mp4" poster="/media/nexus-arena-demo-poster.jpg" autoPlay muted loop playsInline />
-          <span className="video-scanline" />
-        </div>
+        <LandingVideo onCta={focusCheckout} />
       </section>
       <section className="landing-features">
         <Feature icon={<Crosshair />} title="Combate directo" text="Apunta con el mouse, cambia de arma y gana el límite de frags." />
@@ -270,3 +268,89 @@ export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }
 }
 
 function Feature({ icon, title, text }: { icon: ReactNode; title: string; text: string }) { return <article className="landing-feature"><div className="landing-feature-icon">{icon}</div><div><h2>{title}</h2><p>{text}</p></div></article>; }
+
+/**
+ * Gameplay preview. The source file opens with ~7.7 s of non-gameplay (a screen
+ * capture of the landing page, the pause menu and the 3-2-1 countdown), so the
+ * preview starts — and loops back — at the first keyframe of real movement.
+ * The file itself is untouched. Playback starts only while the block is on screen
+ * (IntersectionObserver) and pauses when it scrolls away.
+ */
+const DEMO_VIDEO_START = 7.697;
+
+function LandingVideo({ onCta }: { onCta: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    // React does not reliably reflect `muted` as an attribute; iOS needs it set before play().
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = false;
+
+    const toStart = () => {
+      if (video.duration > DEMO_VIDEO_START + 1 && video.currentTime < DEMO_VIDEO_START) video.currentTime = DEMO_VIDEO_START;
+    };
+    const restart = () => {
+      video.currentTime = video.duration > DEMO_VIDEO_START + 1 ? DEMO_VIDEO_START : 0;
+      void video.play().catch(() => undefined);
+    };
+    const play = () => {
+      if (video.readyState >= 1) toStart();
+      void video.play().catch(() => undefined);
+    };
+    video.addEventListener("loadedmetadata", toStart);
+    video.addEventListener("ended", restart);
+
+    let observer: IntersectionObserver | undefined;
+    if (typeof IntersectionObserver === "function") {
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          if (entry?.isIntersecting) play();
+          else video.pause();
+        },
+        { threshold: 0.25 },
+      );
+      observer.observe(video);
+    } else {
+      play();
+    }
+
+    return () => {
+      observer?.disconnect();
+      video.removeEventListener("loadedmetadata", toStart);
+      video.removeEventListener("ended", restart);
+    };
+  }, []);
+
+  return (
+    <figure className="nx-demo">
+      <link rel="stylesheet" href={landingVideoCss} precedence="default" />
+      <div className="nx-demo-frame">
+        <video
+          ref={videoRef}
+          className="nx-demo-video"
+          src="/media/nexus-arena-demo.mp4"
+          poster="/media/nexus-arena-demo-poster-gameplay.svg"
+          width={1280}
+          height={520}
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          disablePictureInPicture
+          disableRemotePlayback
+          aria-label="Vista previa en video de Nexus Arena: gameplay real en el navegador"
+        />
+        <span className="nx-demo-live" aria-hidden="true"><i /> GAMEPLAY REAL</span>
+      </div>
+      <figcaption className="nx-demo-cta">
+        <span>Así se juega en tu navegador. Sin instalar nada.</span>
+        <button type="button" onClick={onCta}>
+          JUGAR POR $1.000 <ArrowRight aria-hidden="true" />
+        </button>
+      </figcaption>
+    </figure>
+  );
+}
