@@ -66,6 +66,7 @@ import { adsPose, restPose } from "./viewmodel";
 import { debugSpool } from "@/lib/debug-spool";
 
 export type { RemoteSnapshot } from "./network";
+import type { AcceptedHit, AcceptedKill } from "./pvp";
 
 /** Kit per bot slot: Gladiador goku, Operadora cowgirl, Ingeniero agent cowboy, Nyx venom. */
 const BOT_KITS = [10, 9, 7, 8] as const;
@@ -174,7 +175,15 @@ export type EngineHooks = {
   onScreen: (s: Screen) => void;
   onLock: (locked: boolean) => void;
   onArenaCycleStart?: (epochMs: number) => void;
+  /** The local player hit a remote human: report it to the victim (victim-authoritative). */
+  onRemoteHit?: (victimPeerId: string, hit: AcceptedHit) => void;
+  /** The local player died: broadcast so every peer credits the killer. */
+  onLocalDeath?: (death: { killer: string | null; killerName: string | null; weapon: WeaponId | "world"; headshot: boolean }) => void;
 };
+
+const REMOTE_PREFIX = "remote:";
+const peerIdOf = (f: Fighter) => (f.id.startsWith(REMOTE_PREFIX) ? f.id.slice(REMOTE_PREFIX.length) : f.id);
+const _netDir = new THREE.Vector3();
 
 export class NexusArena {
   input = new GameInput();
@@ -723,6 +732,37 @@ export class NexusArena {
     this.net.ingest(id, snapshot);
   }
 
+  /**
+   * A remote human reports hitting the local player (already validated,
+   * deduped and clamped by PvpInbox). We are authoritative over our own
+   * health: hurtFighter ignores it when dead or respawn-protected, and a
+   * lethal hit goes through kill() → onLocalDeath → `kill` broadcast.
+   */
+  applyNetworkHit(shooterPeerId: string, hit: AcceptedHit): boolean {
+    if (!this.matchOn || !this.player.alive) return false;
+    const attacker = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${shooterPeerId}`);
+    if (!attacker) return false;
+    _netDir.set(hit.dir[0], hit.dir[1], hit.dir[2]);
+    this.hurtFighter(this.player, hit.damage, attacker, hit.weapon, _netDir, hit.knock, hit.headshot);
+    return true;
+  }
+
+  /** A remote human announced its own death: killfeed + frags on this client. */
+  applyNetworkKill(kill: AcceptedKill): boolean {
+    const victim = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${kill.victim}`);
+    if (!victim) return false;
+    let killer: Fighter | null = null;
+    if (kill.killer === "self") killer = this.player;
+    else if (kill.killer) killer = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${kill.killer}`) ?? null;
+    // The victim's unreliable snapshot may already have flagged it dead; the
+    // kill must still be credited exactly once, so run kill() regardless.
+    victim.alive = true;
+    this.kill(victim, killer, kill.weapon, kill.headshot, killer ? undefined : (kill.killerName ?? undefined));
+    // Short guard so a late pre-death snapshot cannot revive the replica.
+    victim.respawnAt = performance.now() / 1000 + 0.35;
+    return true;
+  }
+
   buyShopItem(_id: ShopItemId): boolean {
     return false;
   }
@@ -1090,6 +1130,17 @@ export class NexusArena {
           f.vel.set(0, 0, 0);
         }
         if (!f.isRemote && this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f);
+        if (f.isRemote) {
+          // Respawn is victim-driven: revive the replica when its own snapshot says alive.
+          const snap = this.net.sample(peerIdOf(f), dt);
+          if (snap?.alive && now >= f.respawnAt) {
+            f.alive = true;
+            f.health = snap.health;
+            f.vel.set(0, 0, 0);
+            f.pos.set(snap.x, snap.y, snap.z);
+            if (f.mesh) resetFighterMesh(f.mesh);
+          }
+        }
         if (f.alive) continue;
         if (f.isPlayer && this.crushT >= 0) {
           if (f.mesh && f.mesh.visible) {
@@ -1992,6 +2043,23 @@ export class NexusArena {
     if (!f.alive) return;
     if (this.isCtf() && attacker && attacker !== f && attacker.team === f.team) return;
     const now = performance.now() / 1000;
+    if (f.isRemote) {
+      // Remote humans own their health: only the local player's hits are
+      // reported (to the victim); nothing is applied or killed locally.
+      if (attacker?.isPlayer && weapon !== "world" && amount > 0) {
+        this.hooks.onRemoteHit?.(peerIdOf(f), {
+          weapon,
+          damage: amount,
+          headshot,
+          dir: [dir.x, dir.y, dir.z],
+          knock,
+        });
+        this.audio.hit();
+        const mat = f.mesh?.userData.flashMat as THREE.MeshStandardMaterial | undefined;
+        if (mat) mat.emissiveIntensity = 1.4;
+      }
+      return;
+    }
     if (now < f.protectUntil && attacker && attacker !== f) return;
     let dmg = amount;
     if (f.armor > 0) {
@@ -2061,7 +2129,7 @@ export class NexusArena {
     return _crush.set(x + Math.cos(spin) * spread, y, z + Math.sin(spin) * spread);
   }
 
-  private kill(f: Fighter, attacker: Fighter | null, weapon: WeaponId | "world", headshot: boolean) {
+  private kill(f: Fighter, attacker: Fighter | null, weapon: WeaponId | "world", headshot: boolean, killerLabel?: string) {
     if (!f.alive) return;
     f.alive = false;
     f.deaths += 1;
@@ -2136,12 +2204,21 @@ export class NexusArena {
         if (headshot) this.audio.headshot();
         else this.audio.frag();
       }
-    } else if (f.isPlayer) {
+    } else if (f.isPlayer || (f.isRemote && !killerLabel)) {
       f.frags = Math.max(0, f.frags - 1);
+    }
+    if (f.isPlayer) {
+      const killer = attacker && attacker !== f ? attacker : null;
+      this.hooks.onLocalDeath?.({
+        killer: killer?.isRemote ? peerIdOf(killer) : null,
+        killerName: killer ? killer.name : null,
+        weapon,
+        headshot,
+      });
     }
     this.killFeed.unshift({
       id: ++this.feedSeq,
-      attacker: attacker && attacker !== f ? attacker.name : f.name,
+      attacker: attacker && attacker !== f ? attacker.name : (killerLabel ?? f.name),
       victim: f.name,
       weapon,
       headshot,
