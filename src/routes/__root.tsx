@@ -5,6 +5,7 @@ import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { debugSpool } from "@/lib/debug-spool";
 import { bootGoogleAds } from "@/lib/google-ads";
 import appCss from "../styles.css?url";
+import landingCss from "../landing.css?url";
 
 const APP_NAME = "NEXUS ARENA";
 const APP_URL = "https://nexusarena.cl/";
@@ -41,6 +42,7 @@ export const Route = createRootRoute({
       { rel: "canonical", href: APP_URL },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "stylesheet", href: appCss },
+      { rel: "stylesheet", href: landingCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
     ],
