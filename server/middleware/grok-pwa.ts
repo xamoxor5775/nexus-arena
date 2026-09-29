@@ -24,6 +24,7 @@ import {
   renderInstallPageHtml,
   renderWebManifest,
 } from "../../scripts/grok-pwa-shared.mjs";
+import { NO_STORE, staticCacheControl } from "../cache-policy";
 
 interface GrokPwaEvent {
   url: URL;
@@ -53,7 +54,7 @@ function injectHeadStreaming(response: Response, host: string): Response {
   );
   const headers = new Headers(response.headers);
   headers.delete("content-length");
-  headers.set("cache-control", "no-store, no-cache, must-revalidate");
+  headers.set("cache-control", NO_STORE);
   headers.set("pragma", "no-cache");
   return new Response(transformed, {
     status: response.status,
@@ -72,19 +73,17 @@ export default async function grokPwaMiddleware(
   const path = event.url.pathname;
   const urlWithQuery = path + event.url.search;
 
-  if (
-    path.startsWith("/assets/") ||
-    path.startsWith("/textures/") ||
-    path.startsWith("/media/") ||
-    path.startsWith("/models/")
-  ) {
+  // Nitro's static handler (plus STATIC_ROUTE_RULES) answers existing public/
+  // files before this middleware runs; this is the fallback for anything that
+  // still reaches it under a static prefix. Only successful responses get a
+  // public cache header, never 404s or errors.
+  const staticCache = staticCacheControl(path);
+  if (staticCache) {
     const result = await next();
-    if (!(result instanceof Response)) return result;
+    if (!(result instanceof Response) || !result.ok) return result;
     const headers = new Headers(result.headers);
-    headers.set(
-      "cache-control",
-      path.startsWith("/assets/") ? "public, max-age=604800, immutable" : "public, max-age=86400",
-    );
+    headers.set("cache-control", staticCache);
+    headers.delete("pragma");
     return new Response(result.body, { status: result.status, statusText: result.statusText, headers });
   }
 
