@@ -1,7 +1,10 @@
-export type WeaponId = "pulse" | "scatter" | "torpedo" | "lance" | "ion";
-export type PowerId = "rush" | "blink" | "volt";
+export type WeaponId = "pulse" | "scatter" | "torpedo" | "lance" | "ion" | "fauces" | "knife" | "bate" | "martillo";
+export type PowerId = "rush" | "blink" | "volt" | "leap";
+export type ShopItemId = WeaponId | PowerId;
 
-export type Screen = "menu" | "playing" | "paused" | "ended" | "settings" | "help";
+export type Screen = "menu" | "playing" | "paused" | "ended" | "settings" | "help" | "skin";
+export type SkinId = "cian" | "ambar" | "violeta" | "ascua" | "lima";
+export type RoundPrize = "torpedo" | "scatter" | "armor" | "rush";
 
 export type AABB = {
   minX: number;
@@ -12,13 +15,52 @@ export type AABB = {
   maxZ: number;
 };
 
-export type Spawn = { x: number; y: number; z: number; yaw: number };
+export type TeamId = "ion" | "ember";
+
+export type Spawn = { x: number; y: number; z: number; yaw: number; team?: TeamId };
+
+export type FlagPad = {
+  team: TeamId;
+  x: number;
+  y: number;
+  z: number;
+};
 
 export type JumpPad = {
   aabb: AABB;
   vx: number;
   vy: number;
   vz: number;
+  chute?: boolean;
+};
+
+export type TeleportGate = {
+  aabb: AABB;
+  target: { x: number; y: number; z: number; yaw?: number };
+  chute?: boolean;
+};
+
+/** Volumen de agua. Cilindro vertical: frena y reduce la gravedad, no quema. */
+export type WaterZone = {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  height: number;
+};
+
+/** Zona ambiental. Círculo si no hay hx/hz; rectángulo alineado al mapa si los hay. */
+export type HazardZone = {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  hx?: number;
+  hz?: number;
+  damage: number;
+  color: number;
+  /** Trituradora: una sola caída mata y dispara hacia arriba. */
+  crush?: boolean;
 };
 
 export type ItemKind = "health" | "mega" | "armor" | "ammo" | WeaponId | PowerId;
@@ -46,7 +88,20 @@ export type ScoreRow = {
   frags: number;
   deaths: number;
   isPlayer: boolean;
+  team?: TeamId;
 };
+
+export type ArenaId = "pozo" | "cumbre" | "lave" | "luna" | "laberinto" | "mar";
+export type MatchMode = "dm" | "ctf" | "duel";
+
+export type FlagHud = {
+  team: TeamId;
+  state: "home" | "carried" | "dropped";
+  carrier: string | null;
+};
+
+export type TouchActionId = "jump" | "weapon" | "reload" | "grenade" | "aim";
+export type TouchHand = "right" | "left";
 
 export type Settings = {
   name: string;
@@ -55,7 +110,14 @@ export type Settings = {
   volume: number;
   shake: number;
   bots: number;
+  botSpeed: number;
   fragLimit: number;
+  capLimit: number;
+  arena: ArenaId;
+  mode: MatchMode;
+  skin: SkinId;
+  touchHand: TouchHand;
+  touchOrder: TouchActionId[];
 };
 
 export type HudSnapshot = {
@@ -68,6 +130,12 @@ export type HudSnapshot = {
   frags: number;
   deaths: number;
   fragLimit: number;
+  mode: MatchMode;
+  capLimit: number;
+  teamScore: { ion: number; ember: number };
+  flags: FlagHud[];
+  playerTeam: TeamId | null;
+  carrying: TeamId | null;
   countdown: number | null;
   pickup: string | null;
   hitmarker: number;
@@ -80,6 +148,18 @@ export type HudSnapshot = {
   speed: number;
   alive: boolean;
   powers: { id: PowerId; label: string; t: number; color: string }[];
+  roundSeconds: number;
+  credits: number;
+  score: number;
+  level: number;
+  xp: number;
+  xpNeed: number;
+  prize: string | null;
+  leveled: boolean;
+  grenades: number;
+  aiming: boolean;
+  scope: number | null;
+  streak: number;
 };
 
 export type ControlsProbe = {

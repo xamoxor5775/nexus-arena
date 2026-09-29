@@ -111,13 +111,15 @@ async function createPgliteSql(): Promise<Sql> {
   // data survives source edits (it resets on dev-server restart).
   globalRef.__pgliteInstance__ ??= (async () => {
     const { PGlite } = await import("@electric-sql/pglite");
-    const pg = new PGlite({
+    const dataDir = typeof process !== "undefined" ? process.env.PGLITE_DATA_DIR : undefined;
+    const options = {
       parsers: {
         [OID_INT8]: Number,
         [OID_DATE]: identity,
         [OID_INTERVAL]: identity,
       },
-    });
+    };
+    const pg = dataDir ? new PGlite(dataDir, options) : new PGlite(options);
     await pg.waitReady;
     await pg.exec(
       "create table if not exists _migrations (name text primary key, applied_at timestamptz not null default now())",
@@ -233,6 +235,7 @@ if (typeof window === "undefined" && dbSource === "pglite") {
   globalBoot.__pgBootstrapPromise__ ??= ensureDbReady().catch((err) => {
     globalBoot.__pgBootstrapPromise__ = undefined;
     console.error("[db] PGLite bootstrap failed:", err);
+    void import("./debug-spool.server").then((mod) => mod.spoolServer("db.pglite", err)).catch(() => undefined);
     throw err;
   });
 }
