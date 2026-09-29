@@ -1,0 +1,24 @@
+/*
+ * Landing gameplay video block (LandingVideo in landing-page.tsx).
+ * The frame takes the video's own 1280x520 ratio so the footage fills it edge to edge.
+ * Loaded as its own stylesheet so the block is self-contained; the previous
+ * .landing-video-art / .landing-video / .video-scanline rules in styles.css are no longer used.
+ */
+.nx-demo { position: relative; width: min(1050px, 100%); min-width: 0; margin: 28px auto 0; padding: 0; animation: nx-demo-in .7s cubic-bezier(.2, .7, .2, 1) both; }
+.nx-demo-frame { position: relative; overflow: hidden; aspect-ratio: 1280 / 520; border: 1px solid #3ae8d299; background: #05060a url("/media/nexus-arena-demo-poster-gameplay.svg") center / cover no-repeat; box-shadow: 0 0 0 1px #ff553c55, 0 18px 50px #030407cc, 0 0 42px #e24a2b44; transition: box-shadow .35s ease, border-color .35s ease, transform .35s ease; }
+.nx-demo-video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; background: transparent; transition: transform .6s cubic-bezier(.2, .7, .2, 1); }
+.nx-demo-frame::after { position: absolute; inset: 0; pointer-events: none; content: ""; background: repeating-linear-gradient(180deg, transparent 0 3px, #3ae8d20d 3px 4px); opacity: .5; }
+.nx-demo:hover .nx-demo-frame { border-color: #3ae8d2; box-shadow: 0 0 0 1px #ff553c88, 0 22px 60px #030407dd, 0 0 60px #e24a2b66; transform: translateY(-2px); }
+.nx-demo:hover .nx-demo-video { transform: scale(1.015); }
+.nx-demo-live { position: absolute; top: 10px; right: 10px; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 4px 7px; border: 1px solid #3ae8d266; color: #f6f0e2; background: #05060aa6; font: 700 9px var(--font-mono); letter-spacing: .14em; pointer-events: none; }
+.nx-demo-live i { width: 6px; height: 6px; border-radius: 50%; background: #ff553c; box-shadow: 0 0 8px #ff553c; animation: nx-demo-dot 1.6s ease-in-out infinite; }
+.nx-demo-cta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; color: #a09888; font: 11px var(--font-mono); letter-spacing: .06em; text-align: left; }
+.nx-demo-cta button { display: inline-flex; flex: none; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; border: 1px solid #3ae8d2; color: #05060a; background: #3ae8d2; font: 700 11px var(--font-mono); letter-spacing: .1em; cursor: pointer; transition: transform .2s ease, background .2s ease, box-shadow .2s ease; }
+.nx-demo-cta button svg { width: 15px; height: 15px; }
+.nx-demo-cta button:hover { background: #f6f0e2; border-color: #f6f0e2; box-shadow: 0 0 22px #3ae8d266; transform: translateY(-2px); }
+.nx-demo-cta button:focus-visible { outline: 2px solid #f6f0e2; outline-offset: 3px; }
+@keyframes nx-demo-in { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes nx-demo-dot { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .nx-demo, .nx-demo-live i { animation: none; } .nx-demo-frame, .nx-demo-video, .nx-demo-cta button { transition: none; } .nx-demo:hover .nx-demo-frame, .nx-demo:hover .nx-demo-video { transform: none; } }
+@media (min-width: 1080px) { .nx-demo { margin-top: 0; } }
+@media (max-width: 520px) { .nx-demo { margin-top: 20px; } .nx-demo-live { top: 6px; right: 6px; padding: 3px 5px; font-size: 8px; } .nx-demo-cta { flex-direction: column; align-items: stretch; gap: 8px; font-size: 10px; line-height: 1.4; text-align: center; } .nx-demo-cta button { justify-content: center; min-height: 48px; } }

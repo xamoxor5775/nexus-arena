@@ -3,6 +3,7 @@ import { ArrowRight, Crosshair, Gamepad2, ShieldCheck, Volume2, VolumeX, Zap } f
 import type { ReactNode } from "react";
 import { debugSpool } from "@/lib/debug-spool";
 import { trackBeginCheckout, trackEnterArena, trackPurchase } from "@/lib/google-ads";
+import landingVideoCss from "./landing-video.css?url";
 
 export function LandingPage({ onAccessGranted }: { onAccessGranted: () => void }) {
   const [email, setEmail] = useState("");
@@ -324,11 +325,12 @@ function LandingVideo({ onCta }: { onCta: () => void }) {
   }, []);
 
   return (
-    <figure className="landing-video-art">
-      <div className="landing-video-frame">
+    <figure className="nx-demo">
+      <link rel="stylesheet" href={landingVideoCss} precedence="default" />
+      <div className="nx-demo-frame">
         <video
           ref={videoRef}
-          className="landing-video"
+          className="nx-demo-video"
           src="/media/nexus-arena-demo.mp4"
           poster="/media/nexus-arena-demo-poster-gameplay.svg"
           width={1280}
@@ -341,9 +343,9 @@ function LandingVideo({ onCta }: { onCta: () => void }) {
           disableRemotePlayback
           aria-label="Vista previa en video de Nexus Arena: gameplay real en el navegador"
         />
-        <span className="landing-video-live" aria-hidden="true"><i /> GAMEPLAY REAL</span>
+        <span className="nx-demo-live" aria-hidden="true"><i /> GAMEPLAY REAL</span>
       </div>
-      <figcaption className="landing-video-cta">
+      <figcaption className="nx-demo-cta">
         <span>Así se juega en tu navegador. Sin instalar nada.</span>
         <button type="button" onClick={onCta}>
           JUGAR POR $1.000 <ArrowRight aria-hidden="true" />
