@@ -83,6 +83,8 @@ type Fighter = {
   name: string;
   isPlayer: boolean;
   isRemote: boolean;
+  /** Peer id for remote humans (id without "remote:"), cached to avoid per-frame string slicing. */
+  peerId: string;
   color: number;
   colorCss: string;
   pos: THREE.Vector3;
@@ -182,7 +184,7 @@ export type EngineHooks = {
 };
 
 const REMOTE_PREFIX = "remote:";
-const peerIdOf = (f: Fighter) => (f.id.startsWith(REMOTE_PREFIX) ? f.id.slice(REMOTE_PREFIX.length) : f.id);
+const peerIdOf = (f: Fighter) => f.peerId;
 const _netDir = new THREE.Vector3();
 
 export class NexusArena {
@@ -836,6 +838,7 @@ export class NexusArena {
       name,
       isPlayer,
       isRemote,
+      peerId: isRemote && id.startsWith(REMOTE_PREFIX) ? id.slice(REMOTE_PREFIX.length) : id,
       color,
       colorCss,
       pos: new THREE.Vector3(),
@@ -1001,11 +1004,13 @@ export class NexusArena {
       if (f.isPlayer || f.isRemote) continue;
       const on = i < n;
       i++;
-      if (!on && f.alive) {
+      if (!on && f.respawnAt !== 1e12) {
+        // 1e12 marca "bot desactivado": spawn() lo ignora y el marcador lo oculta.
         f.alive = false;
         f.respawnAt = 1e12;
       }
       if (on && f.respawnAt === 1e12) {
+        f.respawnAt = 0;
         this.resetLoadout(f);
         this.fullLoadout(f);
         this.spawn(f);
@@ -1015,6 +1020,8 @@ export class NexusArena {
   }
 
   private spawn(f: Fighter) {
+    // Bots desactivados por el tope (duelo / humanos remotos) no reaparecen.
+    if (f.respawnAt === 1e12 && !f.isPlayer && !f.isRemote) return;
     const others = this.fighters.filter((o) => o.alive && o !== f);
     const teamPool = this.arena.spawns.filter((s) => s.team === f.team);
     const list = this.isCtf() && teamPool.length ? teamPool : this.arena.spawns;
@@ -1132,7 +1139,8 @@ export class NexusArena {
         if (!f.isRemote && this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f);
         if (f.isRemote) {
           // Respawn is victim-driven: revive the replica when its own snapshot says alive.
-          const snap = this.net.sample(peerIdOf(f), dt);
+          // latest() no interpola ni asigna objetos: basta para saber si ya reapareció.
+          const snap = this.net.latest(f.peerId);
           if (snap?.alive && now >= f.respawnAt) {
             f.alive = true;
             f.health = snap.health;
@@ -1189,8 +1197,7 @@ export class NexusArena {
         continue;
       }
       if (f.isRemote) {
-        const remoteId = f.id.startsWith("remote:") ? f.id.slice("remote:".length) : f.id;
-        const snap = this.net.sample(remoteId, dt);
+        const snap = this.net.sample(f.peerId, dt);
         if (snap) {
           f.pos.set(snap.x, snap.y, snap.z);
           f.yaw = snap.yaw;
@@ -3079,7 +3086,7 @@ export class NexusArena {
       hurt: this.hurt,
       killFeed: this.killFeed,
       scoreboard: this.fighters
-        .filter((f) => f.isPlayer || this.fighters.filter((x) => !x.isPlayer).indexOf(f) < this.settings.bots)
+        .filter((f) => f.isPlayer || f.isRemote || f.respawnAt !== 1e12)
         .map((f) => ({
           name: f.name,
           color: f.colorCss,

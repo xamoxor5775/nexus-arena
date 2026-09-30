@@ -303,7 +303,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         <div className="nx-net-badge pointer-events-none absolute right-3 top-3 z-20 rounded-sm border border-health/60 bg-bg/80 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-health shadow-[0_0_18px_rgba(126,220,106,0.18)] sm:right-5 sm:top-5">
           <span className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
           {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
-          {roomNumber > 1 && <span className="opacity-60"> · SALA {roomNumber}</span>}
+          {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
         </div>
       )}
       {demoRemaining !== null && <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-sm border border-ion/70 bg-bg/85 px-4 py-2 text-center"><p className="nx-kicker text-ion">DEMO DE NEXUS ARENA</p><p className="nx-num text-3xl text-fg">00:{String(Math.max(0, demoRemaining)).padStart(2, "0")}</p></div>}
@@ -406,8 +406,10 @@ function MenuLayer({
           <aside className="nx-statcard w-full sm:w-72">
             <p className="nx-statcard-live">
               <i />
-              {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
-              {roomNumber > 1 && <span className="opacity-60"> · sala {roomNumber}</span>}
+              <span className="leading-snug">
+                {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+                {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
+              </span>
             </p>
             <p className="nx-statcard-kicker">Núcleo de la arena</p>
             <p className="nx-statcard-lead">{ctf ? "El límite de capturas se cambia en Ajustes." : "El límite de frags se cambia en Ajustes."}</p>
@@ -1037,7 +1039,7 @@ function HudLayer() {
         )}
       </div>
 
-      <div className="nx-hud-feed absolute right-5 top-5 max-w-xs space-y-1 text-right sm:right-8 sm:top-8">
+      <div className="nx-hud-feed absolute right-5 top-16 max-w-xs space-y-1 text-right sm:right-8 sm:top-[4.75rem]">
         {hud.killFeed.map((k) => (
           <p key={k.id} className="nx-stat text-copy">
             <span className="font-semibold text-fg">{k.attacker}</span>
