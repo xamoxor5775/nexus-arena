@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Crosshair, Pause, Play, Settings as SettingsIcon, Skull, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import type { NexusArena, RemoteSnapshot } from "@/game/engine";
-import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
+import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, isArenaId, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
 import { PvpInbox, makeHitMessage, makeKillMessage } from "@/game/pvp";
 import type { ArenaId, RoundPrize, SkinId, TouchActionId } from "@/game/types";
 import { P2PRoom } from "@/lib/multiplayer";
@@ -33,7 +33,11 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
   const [roomNumber, setRoomNumber] = useState(1);
-  const [devRoom, setDevRoom] = useState(false);
+  // Dev room testers play the server-forced arena (see dev-lock.ts); the lock is sticky.
+  const devRoom = useArena((s) => s.devLock !== null);
+  // Signaling room key: follows the arena/mode pick, but NOT the dev-room forced
+  // arena (the server already put us in the dev room, so no reconnect needed).
+  const [roomKey, setRoomKey] = useState(() => publicRoomId(settings.arena, settings.mode));
   const [radioTick, setRadioTick] = useState(0);
   const worldRev = 84;
 
@@ -114,9 +118,8 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
     roomHostRef.current = null;
     arenaCycleEpochRef.current = null;
     const inbox = new PvpInbox(selfId, WEAPON_META);
-    const baseRoom = publicRoomId(settings.arena, settings.mode);
+    const baseRoom = roomKey;
     setRoomNumber(1);
-    setDevRoom(false);
     const room = new P2PRoom({
       room: baseRoom,
       selfId,
@@ -129,9 +132,10 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         roomHostRef.current = null;
         setRoomNumber(roomOverflowIndex(next) || 1);
       },
-      onDevRoom: () => {
+      onDevRoom: (_room, arena) => {
         setRoomNumber(1);
-        setDevRoom(true);
+        // Everyone in the dev room plays the same map: forced arena, deathmatch.
+        useArena.getState().setDevArena(isArenaId(arena) ? arena : "pozo");
       },
       onPeersChanged: (peers) => {
         setNetworkPlayers(peers.length + 1);
@@ -185,7 +189,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       const snapshot = gameRef.current?.localNetworkSnapshot();
       if (snapshot) room.broadcast({ type: "snapshot", snapshot });
       if (
-        (settings.arena === "mar" || settings.arena === "pozo" || settings.arena === "cumbre") &&
+        (settingsRef.current.arena === "mar" || settingsRef.current.arena === "pozo" || settingsRef.current.arena === "cumbre") &&
         roomHostRef.current === selfId &&
         arenaCycleEpochRef.current !== null &&
         Date.now() - lastCycleSync >= 2500
@@ -203,6 +207,11 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       setNetworkPlayers(1);
       setNetworkState("DESCONECTADO");
     };
+  }, [roomKey]);
+
+  useEffect(() => {
+    if (useArena.getState().devLock) return;
+    setRoomKey(publicRoomId(settings.arena, settings.mode));
   }, [settings.arena, settings.mode]);
 
   useEffect(() => {
@@ -455,6 +464,7 @@ function MenuLayer({
                   key={card.id}
                   card={card}
                   on={on}
+                  locked={devRoom && !on}
                   onClick={() => (on ? onPlay() : pickArena(card.id))}
                 />
               );
@@ -473,6 +483,7 @@ function MenuLayer({
               />
               <PickBtn
                 on={ctf}
+                locked={devRoom}
                 title="Captura"
                 hint="Banderas en Luna"
                 onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })}
@@ -618,31 +629,38 @@ const ARENA_CARDS: Array<{ id: ArenaId; title: string; line: string; art: string
 function ArenaCard({
   card,
   on,
+  locked = false,
   onClick,
 }: {
   card: (typeof ARENA_CARDS)[number];
   on: boolean;
+  /** Dev room: arena fixed by the server, other cards are greyed out. */
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
-      aria-label={on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
+      disabled={locked}
+      title={locked ? "Sala dev: arena fija" : undefined}
+      aria-label={locked ? `${card.title} (bloqueada en sala dev)` : on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
       style={{ ["--arena-rail" as string]: card.rail, backgroundImage: `url(${card.art})` }}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-arena-card ${on ? "is-on" : ""}`}
+      className={`nx-arena-card ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
-      <span className="nx-arena-card-kicker">{on ? "Lista" : "Arena"}</span>
+      <span className="nx-arena-card-kicker">{on ? "Lista" : locked ? "Sala dev" : "Arena"}</span>
       <span className="nx-arena-card-title">{card.title}</span>
       <span className="nx-arena-card-line">{card.line}</span>
       <span className="nx-arena-card-go">{on ? "Entrar" : "Elegir"}</span>
@@ -654,28 +672,35 @@ function PickBtn({
   title,
   hint,
   on,
+  locked = false,
   onClick,
 }: {
   title: string;
   hint?: string;
   on: boolean;
+  /** Dev room: mode fixed to deathmatch. */
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
+      disabled={locked}
+      title={locked ? "Sala dev: deathmatch fijo" : undefined}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""}`}
+      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
       <span className="nx-pick-title">{title}</span>
       {hint ? <span className="nx-pick-hint">{hint}</span> : null}
@@ -729,6 +754,7 @@ function SteelBtn({
 
 function SettingsPanel({ onBack }: { onBack: () => void }) {
   const settings = useArena((s) => s.settings);
+  const devLocked = useArena((s) => s.devLock !== null);
   const isTouch = useArena((s) => s.isTouch);
   const patch = useArena((s) => s.patchSettings);
   const moveTouch = (from: number, dir: -1 | 1) => {
@@ -765,10 +791,10 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
       </label>
       <div className="nx-pick-row nx-pick-modes mt-4" role="group" aria-label="Modo de partida">
         <PickBtn on={settings.mode === "dm"} title="Deathmatch" hint="Todos vs todos" onClick={() => patch({ mode: "dm", bots: 4, fragLimit: 15 })} />
-        <PickBtn on={settings.mode === "ctf"} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
+        <PickBtn on={settings.mode === "ctf"} locked={devLocked} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
       </div>
       <div className="mt-2">
-        <PickBtn on={settings.mode === "duel"} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
+        <PickBtn on={settings.mode === "duel"} locked={devLocked} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
       </div>
       <div className="nx-modal-grid">
         <Slider label={isTouch ? "Sensibilidad de la mira" : "Sensibilidad del mouse"} value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />

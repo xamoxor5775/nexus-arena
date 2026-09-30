@@ -82,6 +82,8 @@ export type RtcPollResult =
       /** Set only for the fixed dev room: the room actually joined. */
       room?: string;
       dev?: true;
+      /** Dev room only: arena (deathmatch) every tester is forced to play. */
+      devArena?: string;
     }
   | { full: true; room: string; capacity: number; suggestedRoom: string | null; peers: []; signals: [] };
 
@@ -90,7 +92,7 @@ export type RtcPollResult =
  * routed the peer there, so it is joined without cap/overflow; `roomName` is the
  * dev room id, not a public room.
  */
-export type RoomAccess = { dev?: boolean };
+export type RoomAccess = { dev?: boolean; devArena?: string };
 
 function roomKey(roomName: string, access?: RoomAccess): string | null {
   if (access?.dev) return roomName || null;
@@ -123,7 +125,7 @@ export function pollRoom(roomName: string, peerId: string, name: string, since: 
       .filter((signal) => signal.id > since && signal.to === peerId)
       .map(({ id, from, kind, payload }) => ({ id, from, kind, payload })),
     hostId: hostOf(room),
-    ...(dev ? { room: roomId, dev: true as const } : { capacity }),
+    ...(dev ? { room: roomId, dev: true as const, ...(access?.devArena ? { devArena: access.devArena } : {}) } : { capacity }),
   };
 }
 

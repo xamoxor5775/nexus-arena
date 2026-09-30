@@ -82,9 +82,15 @@ en una sala fija, sin importar la arena o modo que elijan:
 
 El señalizador (`/api/rtc`) envía a esos jugadores a la sala dev (sin tope de 8,
 sin salas de desborde, sin 409) y rechaza con 403 a cualquier otro que la pida.
-El cliente muestra `SALA 1 · DEV` en la insignia de red. Cada tester sigue
-jugando la arena que tenga elegida: para ver el mismo mapa deben elegir la misma
-arena y modo; la rotación de arena la sincroniza el host (el primero en entrar).
+- `NEXUS_DEV_ARENA` (opcional, por defecto `pozo`; valores desconocidos vuelven
+  a `pozo`). Se envía en la respuesta del poll como `devArena`.
+
+El cliente muestra `SALA 1 · DEV` en la insignia de red y fuerza esa arena en
+modo deathmatch, sin importar lo que el tester haya elegido: todos ven el mismo
+mapa. En la sala dev las otras arenas y los modos Captura/Duelo aparecen
+bloqueados (grises); la elección propia del tester queda guardada y vuelve a
+usarse fuera de la sala dev. La rotación de arena la sincroniza el host (el
+primero en entrar).
 
 Para agregar un tester: añade su id a `NEXUS_DEV_SESSIONS` en el `.env` del
 servidor y recrea el contenedor (`docker compose up -d`; `restart` no relee el

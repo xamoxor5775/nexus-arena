@@ -1,6 +1,7 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_DEV_ROOM, devRoomConfig, parseDevRoom, parseDevSessions, routeRoom } from "./dev-room.ts";
+import { DEFAULT_DEV_ARENA, DEFAULT_DEV_ROOM, devRoomConfig, parseDevArena, parseDevRoom, parseDevSessions, routeRoom } from "./dev-room.ts";
+import { ARENA_IDS } from "../game/constants.ts";
 import { addSignal, leaveRoom, pollRoom } from "./rtc.server.ts";
 
 const rooms = () => (globalThis as { __nexusRtcRooms__?: Map<string, unknown> }).__nexusRtcRooms__!;
@@ -28,6 +29,19 @@ describe("dev room env parsing", () => {
     assert.equal(parseDevRoom("nexus-pozo-dm"), DEFAULT_DEV_ROOM);
     assert.equal(parseDevRoom("nexus-pozo-dm-3"), DEFAULT_DEV_ROOM);
     assert.equal(parseDevRoom("bad room!"), DEFAULT_DEV_ROOM);
+  });
+  it("NEXUS_DEV_ARENA defaults to pozo and only accepts known arenas", () => {
+    assert.equal(DEFAULT_DEV_ARENA, "pozo");
+    assert.equal(parseDevArena(undefined), "pozo");
+    assert.equal(parseDevArena(""), "pozo");
+    assert.equal(parseDevArena(" Cumbre "), "cumbre");
+    for (const id of ARENA_IDS) assert.equal(parseDevArena(id), id);
+    assert.equal(parseDevArena("atlantis"), "pozo");
+    assert.equal(parseDevArena("pozo-dm"), "pozo");
+    assert.equal(parseDevArena("__proto__"), "pozo");
+    assert.equal(config.arena, "pozo");
+    assert.equal(devRoomConfig({ NEXUS_DEV_SESSIONS: DEV_A, NEXUS_DEV_ARENA: "mar" }).arena, "mar");
+    assert.equal(devRoomConfig({ NEXUS_DEV_SESSIONS: DEV_A, NEXUS_DEV_ARENA: "nope" }).arena, "pozo");
   });
   it("feature is off when NEXUS_DEV_SESSIONS is unset", () => {
     const off = devRoomConfig({});
@@ -98,5 +112,31 @@ describe("dev room routing", () => {
     assert.deepEqual(a.signals.map((s) => [s.from, s.kind]), [["b", "offer"]]);
     leaveRoom(post.room, "b", { dev: true });
     assert.deepEqual(pollRoom(DEFAULT_DEV_ROOM, "a", "a", 0, { dev: true }).peers.map((p) => p.id), ["a"]);
+  });
+});
+
+describe("dev room forced arena in the poll response", () => {
+  beforeEach(() => rooms().clear());
+
+  it("dev testers get devArena whatever arena they requested; normal players never do", () => {
+    const mar = devRoomConfig({ NEXUS_DEV_SESSIONS: `${DEV_A},${DEV_B}`, NEXUS_DEV_ARENA: "mar" });
+    const results = [["nexus-pozo-dm", DEV_A, "a"], ["nexus-cumbre-duel", DEV_B, "b"]].map(([req, sid, peer]) => {
+      const route = routeRoom(req!, sid!, mar);
+      assert.ok(route.ok && route.dev);
+      return pollRoom(route.room, peer!, peer!, 0, { dev: true, devArena: mar.arena });
+    });
+    for (const r of results) {
+      assert.ok(!r.full);
+      assert.equal(r.dev, true);
+      assert.equal(r.devArena, "mar");
+      assert.equal(r.room, DEFAULT_DEV_ROOM);
+    }
+    assert.deepEqual(results[1]!.peers.map((p) => p.id).sort(), ["a", "b"]);
+    const route = routeRoom("nexus-lave-dm", "someone-else", mar);
+    assert.ok(route.ok && !route.dev);
+    const n = pollRoom(route.room, "n", "n", 0);
+    assert.ok(!n.full);
+    assert.equal(n.devArena, undefined);
+    assert.equal(n.dev, undefined);
   });
 });

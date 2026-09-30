@@ -1253,6 +1253,13 @@
     }
   }
 
+  /* Dev room (SALA 1 · DEV): arena and mode fixed by the server. */
+  .nx-arena-card.is-locked,
+  .nx-pick.is-locked {
+    opacity: 0.38;
+    filter: grayscale(1);
+    cursor: not-allowed;
+  }
   .nx-arena-card {
     --arena-rail: #3ae8d2;
     position: relative;

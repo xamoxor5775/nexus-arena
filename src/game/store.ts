@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { DEFAULT_SETTINGS, isPlaceholderPilotName, normalizeArena, normalizeMode, normalizeTouchHand, normalizeTouchOrder, randomPilotName, sanitizePilotName, SETTINGS_KEY } from "./constants";
-import type { HudSnapshot, Screen, Settings } from "./types";
+import { lockSettings, patchLocked, persistable, unlockSettings, type DevLock } from "./dev-lock";
+import type { ArenaId, HudSnapshot, Screen, Settings } from "./types";
 
 function persistSettings(settings: Settings) {
   try {
@@ -93,6 +94,8 @@ export type ArenaStore = {
   isTouch: boolean;
   best: number;
   roomHost: boolean;
+  /** Dev room arena lock (null = normal player). See dev-lock.ts. */
+  devLock: DevLock | null;
   setScreen: (s: Screen) => void;
   setHud: (h: HudSnapshot) => void;
   patchSettings: (p: Partial<Settings>) => void;
@@ -100,6 +103,8 @@ export type ArenaStore = {
   setTouch: (v: boolean) => void;
   setBest: (n: number) => void;
   setRoomHost: (v: boolean) => void;
+  /** Force `arena` + deathmatch (dev room), or pass null to restore the player's pick. */
+  setDevArena: (arena: ArenaId | null) => void;
 };
 
 export const useArena = create<ArenaStore>((set, get) => ({
@@ -110,17 +115,29 @@ export const useArena = create<ArenaStore>((set, get) => ({
   isTouch: false,
   best: 0,
   roomHost: true,
+  devLock: null,
   setScreen: (screen) => set({ screen }),
   setHud: (hud) => set({ hud, showBoard: hud.alive ? get().showBoard : get().showBoard }),
   patchSettings: (p) => {
-    const next = { ...get().settings, ...p };
+    const { devLock } = get();
+    const next = patchLocked(get().settings, p, devLock);
     if ("name" in p) next.name = sanitizePilotName(next.name);
     const settings = next;
     set({ settings });
-    persistSettings(settings);
+    persistSettings(persistable(settings, devLock));
   },
   setShowBoard: (showBoard) => set({ showBoard }),
   setTouch: (isTouch) => set({ isTouch }),
   setBest: (best) => set({ best }),
   setRoomHost: (roomHost) => set({ roomHost }),
+  setDevArena: (arena) => {
+    const { settings, devLock } = get();
+    if (arena === null) {
+      if (devLock) set({ settings: unlockSettings(settings, devLock), devLock: null });
+      return;
+    }
+    if (devLock?.arena === arena && settings.arena === arena && settings.mode === "dm") return;
+    const next = lockSettings(settings, arena, devLock);
+    set({ settings: next.settings, devLock: next.lock });
+  },
 }));
