@@ -36,6 +36,9 @@ export interface RtcPollResponse {
   /** Room at capacity: this peer was NOT registered; retry in `suggestedRoom`. */
   full?: boolean;
   suggestedRoom?: string | null;
+  /** Fixed tester room: the server routed this peer into `room` (see dev-room.ts). */
+  room?: string;
+  dev?: boolean;
 }
 
 export interface PeerInfo {
@@ -63,6 +66,8 @@ export interface P2PRoomOptions {
   onRoom?: (info: { arena: string; mode: string; hostId: string; host: boolean }) => void;
   /** The signaling server reported the room full and we moved to an overflow room. */
   onRoomChanged?: (room: string) => void;
+  /** The server placed this peer in the fixed dev room (fires once per room). */
+  onDevRoom?: (room: string) => void;
 }
 
 interface PeerSlot {
@@ -259,6 +264,12 @@ export class P2PRoom {
     if (!this.everPolled) {
       this.everPolled = true;
       this.opts.onConnected?.();
+    }
+    if (body.dev && typeof body.room === "string" && body.room.length <= 100 && body.room !== this.room) {
+      // Dev testers: the server ignores the requested room, so adopt the real
+      // one for signal/leave POSTs and let the UI show "SALA 1 · DEV".
+      this.room = body.room;
+      this.opts.onDevRoom?.(body.room);
     }
     this.reconcileRoster(body.peers);
     if (body.hostId) {

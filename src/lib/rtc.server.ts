@@ -79,20 +79,36 @@ export type RtcPollResult =
       hostId?: string;
       capacity?: number;
       full?: false;
+      /** Set only for the fixed dev room: the room actually joined. */
+      room?: string;
+      dev?: true;
     }
   | { full: true; room: string; capacity: number; suggestedRoom: string | null; peers: []; signals: [] };
 
-export function pollRoom(roomName: string, peerId: string, name: string, since: number): RtcPollResult {
-  if (!isPublicRoomId(roomName)) {
+/**
+ * `dev: true` = the fixed tester room (see dev-room.ts). The caller has already
+ * routed the peer there, so it is joined without cap/overflow; `roomName` is the
+ * dev room id, not a public room.
+ */
+export type RoomAccess = { dev?: boolean };
+
+function roomKey(roomName: string, access?: RoomAccess): string | null {
+  if (access?.dev) return roomName || null;
+  return isPublicRoomId(roomName) ? canonicalRoomId(roomName) : null;
+}
+
+export function pollRoom(roomName: string, peerId: string, name: string, since: number, access?: RoomAccess): RtcPollResult {
+  const roomId = roomKey(roomName, access);
+  if (!roomId) {
     return { peers: [], signals: [] };
   }
-  const roomId = canonicalRoomId(roomName);
+  const dev = Boolean(access?.dev);
   const room = getRoom(roomId);
   const now = Date.now();
   expirePeers(room, now);
   const existing = room.peers.get(peerId);
   const capacity = roomCapacity(roomId);
-  if (!existing && room.peers.size >= capacity) {
+  if (!dev && !existing && room.peers.size >= capacity) {
     // Never kick anyone already inside: the newcomer is sent to an overflow room.
     return { full: true, room: roomId, capacity, suggestedRoom: suggestRoom(roomId, now), peers: [], signals: [] };
   }
@@ -107,13 +123,14 @@ export function pollRoom(roomName: string, peerId: string, name: string, since: 
       .filter((signal) => signal.id > since && signal.to === peerId)
       .map(({ id, from, kind, payload }) => ({ id, from, kind, payload })),
     hostId: hostOf(room),
-    capacity,
+    ...(dev ? { room: roomId, dev: true as const } : { capacity }),
   };
 }
 
-export function addSignal(roomName: string, from: string, to: string, kind: RtcSignal["kind"], payload: unknown) {
-  if (!isPublicRoomId(roomName)) return;
-  const room = getRoom(canonicalRoomId(roomName));
+export function addSignal(roomName: string, from: string, to: string, kind: RtcSignal["kind"], payload: unknown, access?: RoomAccess) {
+  const roomId = roomKey(roomName, access);
+  if (!roomId) return;
+  const room = getRoom(roomId);
   let forPeer = 0;
   for (const signal of room.signals) if (signal.to === to) forPeer++;
   if (forPeer >= SIGNAL_CAP_PER_PEER) {
@@ -124,8 +141,9 @@ export function addSignal(roomName: string, from: string, to: string, kind: RtcS
   room.signals.push({ id: room.nextSignal++, from, to, kind, payload, createdAt: Date.now() });
 }
 
-export function leaveRoom(roomName: string, peerId: string) {
-  const roomId = canonicalRoomId(roomName);
+export function leaveRoom(roomName: string, peerId: string, access?: RoomAccess) {
+  const roomId = roomKey(roomName, access);
+  if (!roomId) return;
   const room = rooms.get(roomId);
   if (!room) return;
   room.peers.delete(peerId);

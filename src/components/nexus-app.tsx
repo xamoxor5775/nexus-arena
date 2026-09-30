@@ -33,6 +33,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
   const [roomNumber, setRoomNumber] = useState(1);
+  const [devRoom, setDevRoom] = useState(false);
   const [radioTick, setRadioTick] = useState(0);
   const worldRev = 84;
 
@@ -115,6 +116,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
     const inbox = new PvpInbox(selfId, WEAPON_META);
     const baseRoom = publicRoomId(settings.arena, settings.mode);
     setRoomNumber(1);
+    setDevRoom(false);
     const room = new P2PRoom({
       room: baseRoom,
       selfId,
@@ -126,6 +128,10 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         knownPeersRef.current = new Set();
         roomHostRef.current = null;
         setRoomNumber(roomOverflowIndex(next) || 1);
+      },
+      onDevRoom: () => {
+        setRoomNumber(1);
+        setDevRoom(true);
       },
       onPeersChanged: (peers) => {
         setNetworkPlayers(peers.length + 1);
@@ -303,13 +309,13 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         <div className="nx-net-badge pointer-events-none absolute right-3 top-3 z-20 rounded-sm border border-health/60 bg-bg/80 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-health shadow-[0_0_18px_rgba(126,220,106,0.18)] sm:right-5 sm:top-5">
           <span className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
           {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
-          {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
+          {devRoom ? <span className="whitespace-nowrap opacity-60"> · SALA 1 · DEV</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
         </div>
       )}
       {demoRemaining !== null && <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-sm border border-ion/70 bg-bg/85 px-4 py-2 text-center"><p className="nx-kicker text-ion">DEMO DE NEXUS ARENA</p><p className="nx-num text-3xl text-fg">00:{String(Math.max(0, demoRemaining)).padStart(2, "0")}</p></div>}
 
       {(screen === "menu" || screen === "settings" || screen === "help" || screen === "skin") && (
-        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} radioTick={radioTick} />
+        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} devRoom={devRoom} radioTick={radioTick} />
       )}
 
       {screen === "playing" && <HudLayer />}
@@ -342,12 +348,14 @@ function MenuLayer({
   networkState,
   networkPlayers,
   roomNumber = 1,
+  devRoom = false,
   radioTick,
 }: {
   onPlay: () => void;
   networkState: string;
   networkPlayers: number;
   roomNumber?: number;
+  devRoom?: boolean;
   radioTick: number;
 }) {
   void radioTick;
@@ -408,7 +416,7 @@ function MenuLayer({
               <i />
               <span className="leading-snug">
                 {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
-                {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
+                {devRoom ? <span className="whitespace-nowrap opacity-60"> · sala 1 · dev</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
               </span>
             </p>
             <p className="nx-statcard-kicker">Núcleo de la arena</p>
