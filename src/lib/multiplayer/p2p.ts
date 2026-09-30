@@ -36,6 +36,11 @@ export interface RtcPollResponse {
   /** Room at capacity: this peer was NOT registered; retry in `suggestedRoom`. */
   full?: boolean;
   suggestedRoom?: string | null;
+  /** Fixed tester room: the server routed this peer into `room` (see dev-room.ts). */
+  room?: string;
+  dev?: boolean;
+  /** Dev room only: arena every tester plays in deathmatch (NEXUS_DEV_ARENA). */
+  devArena?: string;
 }
 
 export interface PeerInfo {
@@ -63,6 +68,11 @@ export interface P2PRoomOptions {
   onRoom?: (info: { arena: string; mode: string; hostId: string; host: boolean }) => void;
   /** The signaling server reported the room full and we moved to an overflow room. */
   onRoomChanged?: (room: string) => void;
+  /**
+   * The server placed this peer in the fixed dev room. Fires when the room or
+   * the forced arena changes (normally once); `arena` is unvalidated input.
+   */
+  onDevRoom?: (room: string, arena: string | null) => void;
 }
 
 interface PeerSlot {
@@ -122,6 +132,7 @@ export class P2PRoom {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private everPolled = false;
+  private devKey = "";
   private lastPeersFingerprint = "";
   private failStreak = 0;
   private hidden = false;
@@ -259,6 +270,18 @@ export class P2PRoom {
     if (!this.everPolled) {
       this.everPolled = true;
       this.opts.onConnected?.();
+    }
+    if (body.dev && typeof body.room === "string" && body.room.length <= 100) {
+      // Dev testers: the server ignores the requested room, so adopt the real
+      // one for signal/leave POSTs and let the UI show "SALA 1 · DEV" and force
+      // the shared arena.
+      const arena = typeof body.devArena === "string" && body.devArena.length <= 32 ? body.devArena : null;
+      const key = `${body.room}|${arena ?? ""}`;
+      if (body.room !== this.room || key !== this.devKey) {
+        this.room = body.room;
+        this.devKey = key;
+        this.opts.onDevRoom?.(body.room, arena);
+      }
     }
     this.reconcileRoster(body.peers);
     if (body.hostId) {

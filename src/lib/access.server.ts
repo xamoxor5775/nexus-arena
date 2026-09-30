@@ -102,6 +102,16 @@ export function accessSessionSigned(headers: Headers): boolean {
   return Boolean(token && sessionTokenLooksValid(token));
 }
 
+/**
+ * Session id (`<id>` in `session.<id>.<ts>.<nonce>.<hmac>`) of a request whose
+ * access token passes the HMAC/age check, or null. Same check as accessSessionSigned.
+ */
+export function accessSessionId(headers: Headers): string | null {
+  const token = headers.get("authorization")?.replace(/^Bearer\s+/i, "") || sessionCookieToken(headers.get("cookie"));
+  if (!token || !sessionTokenLooksValid(token)) return null;
+  return token.split(".")[1] || null;
+}
+
 export async function accessFromHeaders(headers: Headers): Promise<AccessRow | null> {
   const token = headers.get("authorization")?.replace(/^Bearer\s+/i, "") || sessionCookieToken(headers.get("cookie"));
   if (!token) return null;

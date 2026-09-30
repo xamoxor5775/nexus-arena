@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Crosshair, Pause, Play, Settings as SettingsIcon, Skull, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import type { NexusArena, RemoteSnapshot } from "@/game/engine";
-import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
+import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, isArenaId, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
 import { PvpInbox, makeHitMessage, makeKillMessage } from "@/game/pvp";
 import type { ArenaId, RoundPrize, SkinId, TouchActionId } from "@/game/types";
 import { P2PRoom } from "@/lib/multiplayer";
@@ -33,6 +33,11 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
   const [roomNumber, setRoomNumber] = useState(1);
+  // Dev room testers play the server-forced arena (see dev-lock.ts); the lock is sticky.
+  const devRoom = useArena((s) => s.devLock !== null);
+  // Signaling room key: follows the arena/mode pick, but NOT the dev-room forced
+  // arena (the server already put us in the dev room, so no reconnect needed).
+  const [roomKey, setRoomKey] = useState(() => publicRoomId(settings.arena, settings.mode));
   const [radioTick, setRadioTick] = useState(0);
   const worldRev = 84;
 
@@ -113,7 +118,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
     roomHostRef.current = null;
     arenaCycleEpochRef.current = null;
     const inbox = new PvpInbox(selfId, WEAPON_META);
-    const baseRoom = publicRoomId(settings.arena, settings.mode);
+    const baseRoom = roomKey;
     setRoomNumber(1);
     const room = new P2PRoom({
       room: baseRoom,
@@ -126,6 +131,11 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         knownPeersRef.current = new Set();
         roomHostRef.current = null;
         setRoomNumber(roomOverflowIndex(next) || 1);
+      },
+      onDevRoom: (_room, arena) => {
+        setRoomNumber(1);
+        // Everyone in the dev room plays the same map: forced arena, deathmatch.
+        useArena.getState().setDevArena(isArenaId(arena) ? arena : "pozo");
       },
       onPeersChanged: (peers) => {
         setNetworkPlayers(peers.length + 1);
@@ -179,7 +189,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       const snapshot = gameRef.current?.localNetworkSnapshot();
       if (snapshot) room.broadcast({ type: "snapshot", snapshot });
       if (
-        (settings.arena === "mar" || settings.arena === "pozo" || settings.arena === "cumbre") &&
+        (settingsRef.current.arena === "mar" || settingsRef.current.arena === "pozo" || settingsRef.current.arena === "cumbre") &&
         roomHostRef.current === selfId &&
         arenaCycleEpochRef.current !== null &&
         Date.now() - lastCycleSync >= 2500
@@ -197,6 +207,11 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       setNetworkPlayers(1);
       setNetworkState("DESCONECTADO");
     };
+  }, [roomKey]);
+
+  useEffect(() => {
+    if (useArena.getState().devLock) return;
+    setRoomKey(publicRoomId(settings.arena, settings.mode));
   }, [settings.arena, settings.mode]);
 
   useEffect(() => {
@@ -303,13 +318,13 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         <div className="nx-net-badge pointer-events-none absolute right-3 top-3 z-20 rounded-sm border border-health/60 bg-bg/80 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-health shadow-[0_0_18px_rgba(126,220,106,0.18)] sm:right-5 sm:top-5">
           <span className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
           {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
-          {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
+          {devRoom ? <span className="whitespace-nowrap opacity-60"> · SALA 1 · DEV</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
         </div>
       )}
       {demoRemaining !== null && <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-sm border border-ion/70 bg-bg/85 px-4 py-2 text-center"><p className="nx-kicker text-ion">DEMO DE NEXUS ARENA</p><p className="nx-num text-3xl text-fg">00:{String(Math.max(0, demoRemaining)).padStart(2, "0")}</p></div>}
 
       {(screen === "menu" || screen === "settings" || screen === "help" || screen === "skin") && (
-        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} radioTick={radioTick} />
+        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} devRoom={devRoom} radioTick={radioTick} />
       )}
 
       {screen === "playing" && <HudLayer />}
@@ -342,12 +357,14 @@ function MenuLayer({
   networkState,
   networkPlayers,
   roomNumber = 1,
+  devRoom = false,
   radioTick,
 }: {
   onPlay: () => void;
   networkState: string;
   networkPlayers: number;
   roomNumber?: number;
+  devRoom?: boolean;
   radioTick: number;
 }) {
   void radioTick;
@@ -408,7 +425,7 @@ function MenuLayer({
               <i />
               <span className="leading-snug">
                 {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
-                {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
+                {devRoom ? <span className="whitespace-nowrap opacity-60"> · sala 1 · dev</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
               </span>
             </p>
             <p className="nx-statcard-kicker">Núcleo de la arena</p>
@@ -447,6 +464,7 @@ function MenuLayer({
                   key={card.id}
                   card={card}
                   on={on}
+                  locked={devRoom && !on}
                   onClick={() => (on ? onPlay() : pickArena(card.id))}
                 />
               );
@@ -465,6 +483,7 @@ function MenuLayer({
               />
               <PickBtn
                 on={ctf}
+                locked={devRoom}
                 title="Captura"
                 hint="Banderas en Luna"
                 onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })}
@@ -610,31 +629,38 @@ const ARENA_CARDS: Array<{ id: ArenaId; title: string; line: string; art: string
 function ArenaCard({
   card,
   on,
+  locked = false,
   onClick,
 }: {
   card: (typeof ARENA_CARDS)[number];
   on: boolean;
+  /** Dev room: arena fixed by the server, other cards are greyed out. */
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
-      aria-label={on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
+      disabled={locked}
+      title={locked ? "Sala dev: arena fija" : undefined}
+      aria-label={locked ? `${card.title} (bloqueada en sala dev)` : on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
       style={{ ["--arena-rail" as string]: card.rail, backgroundImage: `url(${card.art})` }}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-arena-card ${on ? "is-on" : ""}`}
+      className={`nx-arena-card ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
-      <span className="nx-arena-card-kicker">{on ? "Lista" : "Arena"}</span>
+      <span className="nx-arena-card-kicker">{on ? "Lista" : locked ? "Sala dev" : "Arena"}</span>
       <span className="nx-arena-card-title">{card.title}</span>
       <span className="nx-arena-card-line">{card.line}</span>
       <span className="nx-arena-card-go">{on ? "Entrar" : "Elegir"}</span>
@@ -646,28 +672,35 @@ function PickBtn({
   title,
   hint,
   on,
+  locked = false,
   onClick,
 }: {
   title: string;
   hint?: string;
   on: boolean;
+  /** Dev room: mode fixed to deathmatch. */
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
+      disabled={locked}
+      title={locked ? "Sala dev: deathmatch fijo" : undefined}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""}`}
+      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
       <span className="nx-pick-title">{title}</span>
       {hint ? <span className="nx-pick-hint">{hint}</span> : null}
@@ -721,6 +754,7 @@ function SteelBtn({
 
 function SettingsPanel({ onBack }: { onBack: () => void }) {
   const settings = useArena((s) => s.settings);
+  const devLocked = useArena((s) => s.devLock !== null);
   const isTouch = useArena((s) => s.isTouch);
   const patch = useArena((s) => s.patchSettings);
   const moveTouch = (from: number, dir: -1 | 1) => {
@@ -757,10 +791,10 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
       </label>
       <div className="nx-pick-row nx-pick-modes mt-4" role="group" aria-label="Modo de partida">
         <PickBtn on={settings.mode === "dm"} title="Deathmatch" hint="Todos vs todos" onClick={() => patch({ mode: "dm", bots: 4, fragLimit: 15 })} />
-        <PickBtn on={settings.mode === "ctf"} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
+        <PickBtn on={settings.mode === "ctf"} locked={devLocked} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
       </div>
       <div className="mt-2">
-        <PickBtn on={settings.mode === "duel"} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
+        <PickBtn on={settings.mode === "duel"} locked={devLocked} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
       </div>
       <div className="nx-modal-grid">
         <Slider label={isTouch ? "Sensibilidad de la mira" : "Sensibilidad del mouse"} value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />
