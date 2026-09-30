@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Crosshair, Pause, Play, Settings as SettingsIcon, Skull, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import type { NexusArena, RemoteSnapshot } from "@/game/engine";
-import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, levelFromXp, publicRoomId } from "@/game/constants";
+import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
+import { PvpInbox, makeHitMessage, makeKillMessage } from "@/game/pvp";
 import type { ArenaId, RoundPrize, SkinId, TouchActionId } from "@/game/types";
 import { P2PRoom } from "@/lib/multiplayer";
 import { useArena } from "@/game/store";
@@ -15,6 +16,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const knownPeersRef = useRef(new Set<string>());
   const roomHostRef = useRef<string | null>(null);
   const arenaCycleEpochRef = useRef<number | null>(null);
+  const pvpSeqRef = useRef(0);
   const playArmed = useRef(false);
   const selfIdRef = useRef("");
   if (!selfIdRef.current) {
@@ -30,6 +32,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const [demoRemaining, setDemoRemaining] = useState(demoSeconds ?? null);
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
+  const [roomNumber, setRoomNumber] = useState(1);
   const [radioTick, setRadioTick] = useState(0);
   const worldRev = 84;
 
@@ -81,6 +84,12 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
               roomRef.current?.broadcast({ type: "arena-cycle", epochMs });
             }
           },
+          onRemoteHit: (victimPeerId, hit) => {
+            roomRef.current?.send(makeHitMessage(selfIdRef.current, victimPeerId, ++pvpSeqRef.current, hit), victimPeerId);
+          },
+          onLocalDeath: (death) => {
+            roomRef.current?.send(makeKillMessage(selfIdRef.current, ++pvpSeqRef.current, death));
+          },
         });
         gameRef.current = game;
         (window as unknown as { __nexus?: NexusArena }).__nexus = game;
@@ -103,11 +112,21 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
     const selfId = selfIdRef.current;
     roomHostRef.current = null;
     arenaCycleEpochRef.current = null;
+    const inbox = new PvpInbox(selfId, WEAPON_META);
+    const baseRoom = publicRoomId(settings.arena, settings.mode);
+    setRoomNumber(1);
     const room = new P2PRoom({
-      room: publicRoomId(settings.arena, settings.mode),
+      room: baseRoom,
       selfId,
       name: settingsRef.current.name || "Piloto",
       onConnected: () => setNetworkState("ONLINE"),
+      onRoomChanged: (next) => {
+        // Base room full: we were moved to an overflow room (<room>-2, -3, …).
+        for (const peerId of knownPeersRef.current) gameRef.current?.removeRemotePlayer(peerId);
+        knownPeersRef.current = new Set();
+        roomHostRef.current = null;
+        setRoomNumber(roomOverflowIndex(next) || 1);
+      },
       onPeersChanged: (peers) => {
         setNetworkPlayers(peers.length + 1);
         if (!peers.length) setNetworkState("ONLINE");
@@ -126,9 +145,20 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       onRoom: (info) => {
         roomHostRef.current = info.hostId;
       },
-      onMessage: (from, data) => {
+      onMessage: (from, data, channel) => {
         if (!data || typeof data !== "object") return;
         const packet = data as { type?: string; snapshot?: RemoteSnapshot; epochMs?: number };
+        if (packet.type === "hit" || packet.type === "kill") {
+          if (channel !== "reliable") return;
+          if (packet.type === "hit") {
+            const hit = inbox.acceptHit(from, data);
+            if (hit) gameRef.current?.applyNetworkHit(from, hit);
+          } else {
+            const kill = inbox.acceptKill(from, data);
+            if (kill) gameRef.current?.applyNetworkKill(kill);
+          }
+          return;
+        }
         if (packet.type === "arena-cycle") {
           if (from !== roomHostRef.current || !Number.isFinite(packet.epochMs)) return;
           arenaCycleEpochRef.current = packet.epochMs!;
@@ -273,12 +303,13 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
         <div className="nx-net-badge pointer-events-none absolute right-3 top-3 z-20 rounded-sm border border-health/60 bg-bg/80 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-health shadow-[0_0_18px_rgba(126,220,106,0.18)] sm:right-5 sm:top-5">
           <span className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
           {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
+          {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
         </div>
       )}
       {demoRemaining !== null && <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-sm border border-ion/70 bg-bg/85 px-4 py-2 text-center"><p className="nx-kicker text-ion">DEMO DE NEXUS ARENA</p><p className="nx-num text-3xl text-fg">00:{String(Math.max(0, demoRemaining)).padStart(2, "0")}</p></div>}
 
       {(screen === "menu" || screen === "settings" || screen === "help" || screen === "skin") && (
-        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} radioTick={radioTick} />
+        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} radioTick={radioTick} />
       )}
 
       {screen === "playing" && <HudLayer />}
@@ -310,11 +341,13 @@ function MenuLayer({
   onPlay,
   networkState,
   networkPlayers,
+  roomNumber = 1,
   radioTick,
 }: {
   onPlay: () => void;
   networkState: string;
   networkPlayers: number;
+  roomNumber?: number;
   radioTick: number;
 }) {
   void radioTick;
@@ -373,7 +406,10 @@ function MenuLayer({
           <aside className="nx-statcard w-full sm:w-72">
             <p className="nx-statcard-live">
               <i />
-              {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+              <span className="leading-snug">
+                {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+                {roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
+              </span>
             </p>
             <p className="nx-statcard-kicker">Núcleo de la arena</p>
             <p className="nx-statcard-lead">{ctf ? "El límite de capturas se cambia en Ajustes." : "El límite de frags se cambia en Ajustes."}</p>
@@ -1003,7 +1039,7 @@ function HudLayer() {
         )}
       </div>
 
-      <div className="nx-hud-feed absolute right-5 top-5 max-w-xs space-y-1 text-right sm:right-8 sm:top-8">
+      <div className="nx-hud-feed absolute right-5 top-16 max-w-xs space-y-1 text-right sm:right-8 sm:top-[4.75rem]">
         {hud.killFeed.map((k) => (
           <p key={k.id} className="nx-stat text-copy">
             <span className="font-semibold text-fg">{k.attacker}</span>

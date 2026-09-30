@@ -9,5 +9,8 @@ export default defineEventHandler(async (event) => {
   const room = String(query.room || "").trim();
   const peer = String(query.peer || "").trim();
   if (!isPublicRoomId(room) || !peer || peer.length > 100) { setResponseStatus(event, 400); return { error: "Invalid room" }; }
-  return pollRoom(room, peer, String(query.name || "Piloto").slice(0, 14), Number(query.since || 0));
+  const result = pollRoom(room, peer, String(query.name || "Piloto").slice(0, 14), Number(query.since || 0));
+  // Room at capacity: 409 + { full, suggestedRoom } so the client hops to an overflow room.
+  if (result.full) setResponseStatus(event, 409);
+  return result;
 });
