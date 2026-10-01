@@ -30,16 +30,16 @@ export function loadTex(url: string, repeatX: number, repeatY = repeatX): THREE.
 
 export function loadArenaMaps() {
   return {
-    floor: loadTex("/textures/floor.jpg", 18, 18),
-    plate: loadTex("/textures/plate.jpg", 5, 5),
-    beam: loadTex("/textures/beam.jpg", 1.1, 2.4),
-    pipes: loadTex("/textures/pipes.jpg", 1.6, 1.4),
-    hazard: loadTex("/textures/hazard.jpg", 6, 1.2),
-    console: loadTex("/textures/console.jpg", 2.8, 1.2),
-    rune: loadTex("/textures/rune.jpg", 1, 1),
-    ruin: loadTex("/textures/ruin.jpg", 6, 2.2),
-    armor: loadTex("/textures/armor.jpg", 2.6, 2.6),
-    skull: loadTex("/textures/skull.jpg", 1, 1),
+    floor: loadTex("/textures/floor.png", 18, 18),
+    plate: loadTex("/textures/plate.png", 5, 5),
+    beam: loadTex("/textures/beam.png", 1.1, 2.4),
+    pipes: loadTex("/textures/pipes.png", 1.6, 1.4),
+    hazard: loadTex("/textures/hazard.png", 6, 1.2),
+    console: loadTex("/textures/console.png", 2.8, 1.2),
+    rune: loadTex("/textures/rune.png", 1, 1),
+    ruin: loadTex("/textures/ruin.png", 6, 2.2),
+    armor: loadTex("/textures/armor.png", 2.6, 2.6),
+    skull: loadTex("/textures/skull.png", 1, 1),
   };
 }
 

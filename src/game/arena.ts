@@ -35,8 +35,8 @@ function addBox(
 }
 
 export function addArenaSky(scene: THREE.Scene, mats: THREE.Material[], texs: THREE.Texture[], geos: THREE.BufferGeometry[]) {
-  const skyDome = loadSkyTex("/textures/sky-dome.jpg");
-  const horizon = loadSkyTex("/textures/horizon.jpg");
+  const skyDome = loadSkyTex("/textures/sky-dome.png");
+  const horizon = loadSkyTex("/textures/horizon.png");
   horizon.wrapS = THREE.RepeatWrapping;
   horizon.repeat.set(2, 1);
   texs.push(skyDome, horizon);

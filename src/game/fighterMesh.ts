@@ -21,10 +21,10 @@ let skullMap: THREE.Texture | null = null;
 
 function maps() {
   if (!metalMap) {
-    metalMap = loadTex("/textures/gunmetal.jpg", 2.4, 2.4);
-    polyMap = loadTex("/textures/polymer.jpg", 3.2, 3.2);
-    visorMap = loadTex("/textures/visor.jpg", 1, 1);
-    skullMap = loadTex("/textures/skull.jpg", 1, 1);
+    metalMap = loadTex("/textures/gunmetal.png", 2.4, 2.4);
+    polyMap = loadTex("/textures/polymer.png", 3.2, 3.2);
+    visorMap = loadTex("/textures/visor.png", 1, 1);
+    skullMap = loadTex("/textures/skull.png", 1, 1);
   }
   return { metal: metalMap, poly: polyMap!, visor: visorMap!, skull: skullMap! };
 }

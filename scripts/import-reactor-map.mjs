@@ -2,22 +2,21 @@
 /**
  * Convert assets/quake/nexus_arena.map into the browser arena:
  *   src/game/reactor-map.json
- *   public/textures/reactor/<material>.png
+ *
+ * Surface maps live in scripts/generate-textures.mjs. The Quake TGAs are flat
+ * swatches and are not copied over those maps.
  *
  * Quake III is Z-up, 32 units = 1 meter, deck at Z=128 → game Y=0.
  * Collision stays axis-aligned: boxes stay boxes, other brushes are sliced
  * into columns and merged so ramps become steps the player can walk.
  */
-import { deflateSync } from "node:zlib";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAP_PATH = join(ROOT, "assets/quake/nexus_arena.map");
-const TEX_DIR = join(ROOT, "assets/quake/textures");
 const OUT_JSON = join(ROOT, "src/game/reactor-map.json");
-const OUT_TEX = join(ROOT, "public/textures/reactor");
 
 const SCALE = 1 / 32;
 const FLOOR_Z = 128;
@@ -378,72 +377,6 @@ function q3Origin(text) {
   return [x, y, z];
 }
 
-function crc32(buf) {
-  let c = ~0;
-  for (let i = 0; i < buf.length; i++) {
-    c ^= buf[i];
-    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
-  }
-  return ~c >>> 0;
-}
-
-function pngChunk(type, data) {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const typeBuf = Buffer.from(type);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-  return Buffer.concat([len, typeBuf, data, crc]);
-}
-
-function encodePng(width, height, rgba) {
-  const stride = width * 4;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0;
-    rgba.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
-  }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
-  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  return Buffer.concat([
-    sig,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", deflateSync(raw)),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-function convertTga(file) {
-  const buf = readFileSync(file);
-  const width = buf.readUInt16LE(12);
-  const height = buf.readUInt16LE(14);
-  const bpp = buf[16];
-  const desc = buf[17];
-  const topOrigin = (desc & 0x20) !== 0;
-  const channels = bpp / 8;
-  if (buf[2] !== 2 || (channels !== 3 && channels !== 4)) {
-    throw new Error(`Unsupported TGA ${file}`);
-  }
-  const rgba = Buffer.alloc(width * height * 4);
-  const pixels = buf.subarray(18);
-  for (let y = 0; y < height; y++) {
-    const srcY = topOrigin ? y : height - 1 - y;
-    for (let x = 0; x < width; x++) {
-      const si = (srcY * width + x) * channels;
-      const di = (y * width + x) * 4;
-      rgba[di] = pixels[si + 2];
-      rgba[di + 1] = pixels[si + 1];
-      rgba[di + 2] = pixels[si];
-      rgba[di + 3] = channels === 4 ? pixels[si + 3] : 255;
-    }
-  }
-  return encodePng(width, height, rgba);
-}
-
 function pointInSolid(solids, x, y, z, hw, h) {
   for (const s of solids) {
     if (x + hw > s[0] && x - hw < s[3] && y + h > s[1] && y < s[4] && z + hw > s[2] && z - hw < s[5]) {
@@ -576,17 +509,6 @@ function main() {
   const doc = { meshes, solids, pads, items, spawns, waypoints };
   writeFileSync(OUT_JSON, JSON.stringify(doc));
 
-  mkdirSync(OUT_TEX, { recursive: true });
-  const written = [];
-  for (const name of readdirSync(TEX_DIR)) {
-    if (!name.endsWith(".tga")) continue;
-    const mat = name.replace(/\.tga$/, "");
-    if (NODRAW.has(mat)) continue;
-    const png = convertTga(join(TEX_DIR, name));
-    writeFileSync(join(OUT_TEX, `${mat}.png`), png);
-    written.push(mat);
-  }
-
   const tris = Object.values(meshes).reduce((n, m) => n + m.positions.length / 9, 0);
   console.log(
     JSON.stringify(
@@ -600,7 +522,6 @@ function main() {
         spawns: spawns.length,
         stuck: stuck.length,
         floating: floating.length,
-        textures: written,
         jsonBytes: readFileSync(OUT_JSON).length,
       },
       null,
