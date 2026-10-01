@@ -405,7 +405,7 @@ function ruinWall(x, y, size) {
 }
 
 const ARENA = {
-  floor: (x, y, s) => floorDiamond(x, y, s, [78, 84, 90], 1),
+  floor: (x, y, s) => floorDiamond(x, y, s, [168, 172, 176], 1),
   plate: (x, y, s) => metal(x, y, s, [104, 108, 114], 2, { cell: 128, grain: 7, scratches: false }),
   wall: (x, y, s) => metal(x, y, s, [96, 100, 108], 3, { cell: 128, grain: 14 }),
   beam: (x, y, s) => metal(x, y, s, [108, 96, 84], 4, { cell: 256, brush: "y", rivetInset: 18 }),
@@ -432,7 +432,7 @@ const ARENA = {
 };
 
 const REACTOR = {
-  floor: (x, y, s) => floorDiamond(x, y, s, [48, 70, 74], 41),
+  floor: (x, y, s) => floorDiamond(x, y, s, [132, 158, 156], 41),
   metal: (x, y, s) => metal(x, y, s, [118, 122, 128], 42, { cell: 128 }),
   dark: (x, y, s) => metal(x, y, s, [36, 38, 44], 43, { cell: 128, grain: 8, scratches: false }),
   rock,

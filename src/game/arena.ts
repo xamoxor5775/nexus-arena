@@ -100,8 +100,8 @@ export function buildArena(scene: THREE.Scene): ArenaData {
 
   const floorMat = new THREE.MeshStandardMaterial({
     map: maps.floor,
-    roughness: 0.7,
-    metalness: 0.48,
+    roughness: 0.62,
+    metalness: 0.18,
     color: 0xffffff,
     emissive: 0x2ee0c8,
     emissiveMap: maps.floor,

@@ -24,8 +24,8 @@ function materialFor(name: string, map: THREE.Texture): THREE.MeshStandardMateri
   return new THREE.MeshStandardMaterial({
     map,
     color: 0xffffff,
-    roughness: name === "rock" ? 0.82 : 0.55,
-    metalness: name === "rock" || name === "coolant" ? 0.08 : 0.42,
+    roughness: name === "rock" ? 0.82 : name === "floor" ? 0.62 : 0.55,
+    metalness: name === "rock" || name === "coolant" ? 0.08 : name === "floor" ? 0.2 : 0.42,
     emissive: glow ? glow.color : 0x000000,
     emissiveMap: glow ? map : null,
     emissiveIntensity: glow?.intensity ?? 0,
