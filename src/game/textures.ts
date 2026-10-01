@@ -110,34 +110,19 @@ function skyFallback(url: string): HTMLCanvasElement {
   return c;
 }
 
-function applyImage(tex: THREE.Texture, img: HTMLImageElement) {
-  const src = tex.image as HTMLCanvasElement;
-  src.width = img.naturalWidth || img.width || src.width;
-  src.height = img.naturalHeight || img.height || src.height;
-  const ctx = src.getContext("2d");
-  if (!ctx) return;
-  ctx.drawImage(img, 0, 0, src.width, src.height);
+function useFallback(tex: THREE.Texture, canvas: HTMLCanvasElement) {
+  tex.image = canvas;
   tex.needsUpdate = true;
-}
-
-function hydrate(tex: THREE.Texture, url: string) {
-  loader.load(
-    url,
-    (loaded) => applyImage(tex, loaded.image as HTMLImageElement),
-    undefined,
-    () => {
-      console.warn(`[nexus] missing ${url}; using procedural fallback`);
-    },
-  );
 }
 
 export function loadTex(url: string, repeatX: number, repeatY = repeatX): THREE.Texture {
   const hit = texCache.get(url);
   if (hit) return hit;
-  const tex = new THREE.Texture(proceduralMap(url, 256, 256));
-  tex.needsUpdate = true;
+  const tex = loader.load(url, undefined, undefined, () => {
+    console.warn(`[nexus] missing ${url}; using procedural fallback`);
+    useFallback(tex, proceduralMap(url, 256, 256));
+  });
   configure(tex, THREE.RepeatWrapping, repeatX, repeatY, loDevice() ? 2 : 4);
-  hydrate(tex, url);
   texCache.set(url, tex);
   return tex;
 }
@@ -160,8 +145,10 @@ export function loadArenaMaps() {
 export function loadSkyTex(url: string): THREE.Texture {
   const hit = texCache.get(url);
   if (hit) return hit;
-  const tex = new THREE.Texture(skyFallback(url));
-  tex.needsUpdate = true;
+  const tex = loader.load(url, undefined, undefined, () => {
+    console.warn(`[nexus] missing ${url}; using procedural fallback`);
+    useFallback(tex, skyFallback(url));
+  });
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 1;
   tex.wrapS = url.includes("horizon") ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
@@ -169,7 +156,6 @@ export function loadSkyTex(url: string): THREE.Texture {
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = false;
-  hydrate(tex, url);
   texCache.set(url, tex);
   return tex;
 }
