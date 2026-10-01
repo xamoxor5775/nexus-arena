@@ -14,6 +14,7 @@ export type ArenaData = {
   spawns: Spawn[];
   waypoints: { x: number; y: number; z: number }[];
   lights: ArenaLights;
+  menuRadius?: number;
   dispose: () => void;
 };
 
@@ -31,6 +32,46 @@ function addBox(
 ) {
   batch.add(mat, x, y, z, w, h, d);
   if (collide) solids.push(boxAt(x, y, z, w, h, d));
+}
+
+export function addArenaSky(scene: THREE.Scene, mats: THREE.Material[], texs: THREE.Texture[], geos: THREE.BufferGeometry[]) {
+  const skyDome = loadSkyTex("/textures/sky-dome.png");
+  const horizon = loadSkyTex("/textures/horizon.png");
+  horizon.wrapS = THREE.RepeatWrapping;
+  horizon.repeat.set(2, 1);
+  texs.push(skyDome, horizon);
+
+  const skyGeo = new THREE.SphereGeometry(260, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.5);
+  const skyMat = new THREE.MeshBasicMaterial({
+    map: skyDome,
+    side: THREE.BackSide,
+    fog: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  mats.push(skyMat);
+  const sky = new THREE.Mesh(skyGeo, skyMat);
+  sky.position.y = 12;
+  sky.frustumCulled = false;
+  sky.renderOrder = -20;
+  scene.add(sky);
+
+  const cityGeo = new THREE.CylinderGeometry(92, 92, 40, 20, 1, true);
+  const cityMat = new THREE.MeshBasicMaterial({
+    map: horizon,
+    side: THREE.BackSide,
+    fog: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  mats.push(cityMat);
+  const city = new THREE.Mesh(cityGeo, cityMat);
+  city.position.y = 18;
+  city.frustumCulled = false;
+  city.renderOrder = -18;
+  scene.add(city);
+  geos.push(skyGeo, cityGeo);
+  return { sky, city };
 }
 
 export function buildArena(scene: THREE.Scene): ArenaData {
@@ -59,8 +100,8 @@ export function buildArena(scene: THREE.Scene): ArenaData {
 
   const floorMat = new THREE.MeshStandardMaterial({
     map: maps.floor,
-    roughness: 0.7,
-    metalness: 0.48,
+    roughness: 0.62,
+    metalness: 0.18,
     color: 0xffffff,
     emissive: 0x2ee0c8,
     emissiveMap: maps.floor,
@@ -363,44 +404,9 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     { x: 38, y: 0, z: 38 },
   ];
 
-  const skyDome = loadSkyTex("/textures/sky-dome.jpg");
-  const horizon = loadSkyTex("/textures/horizon.jpg");
-  horizon.wrapS = THREE.RepeatWrapping;
-  horizon.repeat.set(2, 1);
-  texs.push(skyDome, horizon);
-
-  const skyGeo = new THREE.SphereGeometry(260, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.5);
-  const skyMat = new THREE.MeshBasicMaterial({
-    map: skyDome,
-    side: THREE.BackSide,
-    fog: false,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  mats.push(skyMat);
-  const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.position.y = 12;
-  sky.frustumCulled = false;
-  sky.renderOrder = -20;
-  scene.add(sky);
-
-  const cityGeo = new THREE.CylinderGeometry(92, 92, 40, 20, 1, true);
-  const cityMat = new THREE.MeshBasicMaterial({
-    map: horizon,
-    side: THREE.BackSide,
-    fog: false,
-    depthWrite: false,
-    toneMapped: false,
-  });
-  mats.push(cityMat);
-  const city = new THREE.Mesh(cityGeo, cityMat);
-  city.position.y = 18;
-  city.frustumCulled = false;
-  city.renderOrder = -18;
-  scene.add(city);
+  const { sky, city } = addArenaSky(scene, mats, texs, geos);
 
   batch.build(group);
-  geos.push(skyGeo, cityGeo);
 
   scene.add(group);
 

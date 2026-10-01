@@ -6,10 +6,10 @@ import { loadTex } from "./textures";
 const LAYER = 1;
 
 function gunMap() {
-  return loadTex("/textures/gunmetal.jpg", 2.4, 1.6);
+  return loadTex("/textures/gunmetal.png", 2.4, 1.6);
 }
 function polyMap() {
-  return loadTex("/textures/polymer.jpg", 1.8, 1.8);
+  return loadTex("/textures/polymer.png", 1.8, 1.8);
 }
 
 function steel(color: number, metal = 0.78, rough = 0.28, map = true) {

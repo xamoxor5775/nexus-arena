@@ -12,7 +12,7 @@ export function NexusApp() {
   const hud = useArena((s) => s.hud);
   const isTouch = useArena((s) => s.isTouch);
   const showBoard = useArena((s) => s.showBoard);
-  const worldRev = 23;
+  const mapId = useArena((s) => s.mapId);
 
   useEffect(() => {
     useArena.getState().setTouch(
@@ -35,11 +35,16 @@ export function NexusApp() {
       const { NexusArena } = await import("@/game/engine");
       if (disposed || !canvasRef.current) return;
       const store = useArena.getState();
-      game = new NexusArena(canvasRef.current, store.settings, {
-        onHud: (h) => useArena.getState().setHud(h),
-        onScreen: (s) => useArena.getState().setScreen(s),
-        onLock: () => {},
-      });
+      game = new NexusArena(
+        canvasRef.current,
+        store.settings,
+        {
+          onHud: (h) => useArena.getState().setHud(h),
+          onScreen: (s) => useArena.getState().setScreen(s),
+          onLock: () => {},
+        },
+        mapId,
+      );
       gameRef.current = game;
       (window as unknown as { __nexus?: NexusArena }).__nexus = game;
       game.start();
@@ -50,7 +55,7 @@ export function NexusApp() {
       gameRef.current = null;
       delete (window as unknown as { __nexus?: NexusArena }).__nexus;
     };
-  }, [worldRev]);
+  }, [mapId]);
 
   useEffect(() => {
     const g = gameRef.current;
@@ -126,6 +131,9 @@ function MenuLayer({ onPlay }: { onPlay: () => void }) {
   const setScreen = useArena((s) => s.setScreen);
   const best = useArena((s) => s.best);
   const settings = useArena((s) => s.settings);
+  const mapId = useArena((s) => s.mapId);
+  const setMapId = useArena((s) => s.setMapId);
+  const reactor = mapId === "reactor";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-10 p-2 sm:p-3">
@@ -143,7 +151,9 @@ function MenuLayer({ onPlay }: { onPlay: () => void }) {
               <h1 className="nx-ink nx-title">NEXUS ARENA</h1>
             </div>
             <p className="nx-copy nx-body mt-2 hidden max-w-xl sm:mt-3 sm:block">
-              Combate de arena a 360. Saltos, pads, cinco armas y bots que no perdonan.{" "}
+              {reactor
+                ? "Reactor octogonal: anillo, rampas, puentes y dos pads de salto. "
+                : "Combate de arena a 360. Saltos, pads, cinco armas y bots que no perdonan. "}
               <span className="nx-ink font-medium">El primero</span> en el límite de frags se queda el pozo.
             </p>
           </div>
@@ -157,7 +167,7 @@ function MenuLayer({ onPlay }: { onPlay: () => void }) {
                 Jump pads <span className="nx-ink font-semibold">10</span>
               </li>
               <li className="flex justify-between">
-                Mapa <span className="nx-ink font-semibold">88 m</span>
+                Mapa <span className="nx-ink font-semibold">{reactor ? "80 m" : "88 m"}</span>
               </li>
               <li className="flex justify-between">
                 Límite <span className="nx-ink font-semibold">{settings.fragLimit}</span>
@@ -174,7 +184,13 @@ function MenuLayer({ onPlay }: { onPlay: () => void }) {
 
         <footer className="relative z-10 grid gap-2 px-3 py-2 sm:grid-cols-[minmax(0,18rem)_1fr_auto] sm:items-end sm:gap-3 sm:px-8 sm:py-4 sm:pb-6">
           {screen === "menu" && (
-            <nav className="grid grid-cols-3 gap-2 sm:flex sm:flex-col">
+            <nav className="grid grid-cols-2 gap-2 sm:flex sm:flex-col">
+              <SteelBtn primary={mapId === "crucible"} onClick={() => setMapId("crucible")}>
+                Pozo
+              </SteelBtn>
+              <SteelBtn primary={mapId === "reactor"} onClick={() => setMapId("reactor")}>
+                Reactor
+              </SteelBtn>
               <SteelBtn primary onClick={onPlay} icon={<Play className="size-4" />}>
                 Jugar
               </SteelBtn>
