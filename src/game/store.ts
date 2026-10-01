@@ -37,6 +37,18 @@ const emptyHud: HudSnapshot = {
   powers: [],
 };
 
+export type ArenaId = "crucible" | "reactor";
+
+const MAP_KEY = "nexus-arena-map-v1";
+
+function loadMapId(): ArenaId {
+  try {
+    return localStorage.getItem(MAP_KEY) === "reactor" ? "reactor" : "crucible";
+  } catch {
+    return "crucible";
+  }
+}
+
 export type ArenaStore = {
   screen: Screen;
   settings: Settings;
@@ -44,7 +56,9 @@ export type ArenaStore = {
   showBoard: boolean;
   isTouch: boolean;
   best: number;
+  mapId: ArenaId;
   setScreen: (s: Screen) => void;
+  setMapId: (id: ArenaId) => void;
   setHud: (h: HudSnapshot) => void;
   patchSettings: (p: Partial<Settings>) => void;
   setShowBoard: (v: boolean) => void;
@@ -59,7 +73,16 @@ export const useArena = create<ArenaStore>((set, get) => ({
   showBoard: false,
   isTouch: false,
   best: 0,
+  mapId: loadMapId(),
   setScreen: (screen) => set({ screen }),
+  setMapId: (mapId) => {
+    set({ mapId });
+    try {
+      localStorage.setItem(MAP_KEY, mapId);
+    } catch {
+      /* ignore */
+    }
+  },
   setHud: (hud) => set({ hud, showBoard: hud.alive ? get().showBoard : get().showBoard }),
   patchSettings: (p) => {
     const settings = { ...get().settings, ...p };
