@@ -12,7 +12,7 @@
     "prepare:game": "node scripts/prepare.mjs",
     "build": "npm run prepare:game && vite build --config vite.config.mjs",
     "start": "npm run build && electron .",
-    "test": "node --test tests/desktop.test.cjs",
+    "test": "node --test tests/desktop.test.cjs tests/offline-styles.test.cjs",
     "smoke": "electron . --smoke-test --use-angle=swiftshader --enable-unsafe-swiftshader",
     "dist:win": "npm run test && npm run build && electron-builder --win nsis zip --x64 --publish never",
     "pack:win": "npm run test && npm run build && electron-builder --win --x64 --dir --publish never"

@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function offlineStyles(css) {
-  const local = css.replace(/@import\s+url\(["']?https:\/\/fonts\.googleapis\.com\/[^;]+;\s*/g, "");
+  // Google Fonts URLs contain semicolons in their weight lists (500;600).
+  // Match the complete url(...) import, not the first semicolon in its URL.
+  const googleFontsImport = /@import\s+url\(\s*(?:"https:\/\/fonts\.googleapis\.com\/[^\"]*"|'https:\/\/fonts\.googleapis\.com\/[^']*'|https:\/\/fonts\.googleapis\.com\/[^\s)]*)\s*\)\s*;\s*/gi;
+  const local = css.replace(googleFontsImport, "");
   if (/(?:@import\s+["']|url\(\s*["']?)(?:https?:)?\/\//i.test(local)) {
     throw new Error("Desktop CSS still contains a remote resource. Bundle it locally first.");
   }

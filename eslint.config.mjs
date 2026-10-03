@@ -15,6 +15,8 @@ export default tseslint.config(
       ".nitro/**",
       "node_modules/**",
       "src/routeTree.gen.ts",
+      // The isolated Electron package has its own tests and generated snapshot.
+      "desktop/**",
     ],
   },
   js.configs.recommended,
