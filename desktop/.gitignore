@@ -1,0 +1,6 @@
+node_modules/
+.generated/
+dist/
+release/
+*.log
+# Commit package-lock.json after the first successful install.

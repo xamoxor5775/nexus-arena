@@ -1,0 +1,65 @@
+name: Nexus Arena Desktop Windows
+on:
+  workflow_dispatch:
+  push:
+    branches: [desktop/windows-electron]
+    paths:
+      - 'desktop/**'
+      - 'src/game/**'
+      - 'src/components/nexus-app.tsx'
+      - 'src/styles.css'
+      - 'public/textures/**'
+      - '.github/workflows/desktop-windows.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install isolated desktop toolchain
+        shell: pwsh
+        run: |
+          if (Test-Path package-lock.json) { npm ci } else { npm install }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build unsigned Windows installer and portable ZIP
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Test the packaged executable
+        shell: pwsh
+        run: |
+          $exe = Join-Path (Get-Location) 'release\win-unpacked\Nexus Arena.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList '--smoke-test','--use-angle=swiftshader','--enable-unsafe-swiftshader' -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged smoke test timed out'
+          }
+          $process.Refresh()
+          if ($process.ExitCode -ne 0) { throw "Packaged smoke test failed: $($process.ExitCode)" }
+      - name: Upload build and dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-Arena-Windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+            desktop/package-lock.json
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-Arena-Windows-diagnostics
+          if-no-files-found: ignore
+          path: |
+            desktop/release/builder-debug.yml
+            C:/Users/runneradmin/AppData/Local/Temp/nexus-arena-test-*/desktop.log
