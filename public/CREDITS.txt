@@ -1,0 +1,75 @@
+NEXUS ARENA — CRÉDITOS / CREDITS
+=================================
+
+Modelos 3D de terceros usados como diseños opcionales de armas (Arsenal).
+Third-party 3D models used as optional cosmetic weapon skins (Arsenal).
+
+Todos bajo licencia Creative Commons Atribución 4.0 Internacional (CC BY 4.0):
+All licensed under Creative Commons Attribution 4.0 International (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+Modificado / Modified: optimizado/escalado — texturas reducidas (máx. 1024 px) y
+convertidas a WebP, malla comprimida (meshopt), animaciones eliminadas, reorientado
+y escalado para la vista en primera persona. / optimized/scaled: textures downsized
+and converted to WebP, mesh compressed, animations removed, re-oriented and scaled.
+
+Los autores no patrocinan ni respaldan Nexus Arena. / The authors do not sponsor or
+endorse Nexus Arena.
+
+1. "AR-H470" by Frostoise (https://sketchfab.com/Frostoise)
+   https://sketchfab.com/3d-models/ar-h470-4b38c160243743d681d6fdaf3bd77ddb
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: PULSE · "AR-H470"
+
+2. "Low Poly Futuristic Sci Fi Sub Machine Gun" by Anatomy by Doctor Jana (https://sketchfab.com/docjana)
+   https://sketchfab.com/3d-models/low-poly-futuristic-sci-fi-sub-machine-gun-39f1767e68834396b9ea1beea41c0abf
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: PULSE · "Neón SMG"
+
+3. "Sci-fi Super Shotgun" by tnnv (https://sketchfab.com/tnnv)
+   https://sketchfab.com/3d-models/sci-fi-super-shotgun-5929e6949d1e421e927116e117248f07
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: SCATTER · "Super Shotgun"
+
+4. "BRT-BLASTER v1 — Optimized Game-Ready Weapon" by D.Acee (https://sketchfab.com/D.Acee)
+   https://sketchfab.com/3d-models/brt-blaster-v1-optimized-game-ready-weapon-270371dc262548ec9cfcacc514782d26
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: TORPEDO · "BRT-Blaster"
+
+5. "Nexus Rail Gun" by Bl4ckGh0st (https://sketchfab.com/Bl4ckGh0st)
+   https://sketchfab.com/3d-models/nexus-rail-gun-c3952b3905b64f249cb240b5b3fe8d9d
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: LANCE · "Nexus Rail"
+
+6. "Sci-fi Stylized Laser Gun - Game Ready Asset" by rkna (https://sketchfab.com/diegorequena)
+   https://sketchfab.com/3d-models/sci-fi-stylized-laser-gun-game-ready-asset-ff82a081ec214b2d8eff8417e2b06545
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: ION · "Láser estilizado"
+
+7. "Cyborg Weapon" by Enalrem (https://sketchfab.com/enalrem)
+   https://sketchfab.com/3d-models/cyborg-weapon-8bf111f38ff34ad38068739819fdaf0d
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: FAUCES · "Cyborg"
+
+8. "Neon Blade - Sword" by Wawann (https://sketchfab.com/Wawann)
+   https://sketchfab.com/3d-models/neon-blade-sword-e3caffae38ff43aea3476cea700b6a00
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: ESPADA · "Hoja de neón"
+
+9. "Metal Baseball Bat" by Enshin (https://sketchfab.com/enshin)
+   https://sketchfab.com/3d-models/metal-baseball-bat-ae15b871add9416a94dc940b117e6e2b
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: BATE · "Bate metálico"
+
+10. "Futuristic Mace [Download]" by Oskar "K1TT3N" Adamczyk (https://sketchfab.com/K1TT3N)
+   https://sketchfab.com/3d-models/futuristic-mace-download-67e32e394d774516a0742949359e0e4f
+   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) — modified: optimized/scaled.
+   En el juego / in game: MARTILLO · "Maza futurista"
+
+ARENA REACTOR
+-------------
+Mapa original de Nexus Arena (Quake III .map propio, assets/quake/nexus_arena.map en
+xamoxor5775/nexus-arena) importado con scripts/import-reactor-map.mjs. Texturas generadas
+proceduralmente (scripts/generate-textures.mjs), optimizadas a WebP 512 px. Sin assets de
+terceros. / Original Nexus Arena map and procedurally generated textures; no third-party assets.
+Cielo: panorama espacial propio del juego (space-ruby).

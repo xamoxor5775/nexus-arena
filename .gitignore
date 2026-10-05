@@ -17,3 +17,22 @@ artifacts/
 AGENTS.md
 AGENTS.project.md
 *.local
+*.spool
+*.spool.1
+logs/*
+!logs/.gitkeep
+
+# Server-side backups, local DB data and dumps (never commit)
+*.previews-*
+*.bak
+*.orig
+*.backup
+*.backup-*
+*.bak-*
+skin-store.bak
+*.bak-pre-*
+backups/
+data/
+pglite*/
+*.sql.gz
+*.dump

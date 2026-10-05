@@ -29,6 +29,18 @@ export interface SignalRow {
 export interface RtcPollResponse {
   peers: PeerRow[];
   signals: SignalRow[];
+  arena?: string;
+  mode?: string;
+  hostId?: string;
+  capacity?: number;
+  /** Room at capacity: this peer was NOT registered; retry in `suggestedRoom`. */
+  full?: boolean;
+  suggestedRoom?: string | null;
+  /** Fixed tester room: the server routed this peer into `room` (see dev-room.ts). */
+  room?: string;
+  dev?: boolean;
+  /** Dev room only: arena every tester plays in deathmatch (NEXUS_DEV_ARENA). */
+  devArena?: string;
 }
 
 export interface PeerInfo {
@@ -52,6 +64,15 @@ export interface P2PRoomOptions {
   onMessage?: (from: string, data: unknown, channel: "state" | "reliable") => void;
   /** Fires once, on the first successful signaling poll (registration). */
   onConnected?: () => void;
+  getSession?: () => { arena: string; mode: string };
+  onRoom?: (info: { arena: string; mode: string; hostId: string; host: boolean }) => void;
+  /** The signaling server reported the room full and we moved to an overflow room. */
+  onRoomChanged?: (room: string) => void;
+  /**
+   * The server placed this peer in the fixed dev room. Fires when the room or
+   * the forced arena changes (normally once); `arena` is unvalidated input.
+   */
+  onDevRoom?: (room: string, arena: string | null) => void;
 }
 
 interface PeerSlot {
@@ -74,8 +95,9 @@ interface PeerSlot {
   pingSentAt?: number;
 }
 
-const FAST_POLL_MS = 400;
-const IDLE_POLL_MS = 2000;
+const FAST_POLL_MS = 700;
+const IDLE_POLL_MS = 5000;
+const HIDDEN_POLL_MS = 12000;
 const PING_INTERVAL_MS = 2000;
 const STALL_MS = 10_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
@@ -97,6 +119,11 @@ export function defaultIceServers(): RTCIceServer[] {
 
 export class P2PRoom {
   private readonly opts: P2PRoomOptions;
+  private displayName: string;
+  /** Current room id; starts as opts.room and may move to an overflow room when full. */
+  private room: string;
+  private roomHops = 0;
+  private hopPending = false;
   private readonly peers = new Map<string, PeerSlot>();
   /** Per-remote-peer signal delivery chains (order-preserving). */
   private readonly signalQueues = new Map<string, Promise<void>>();
@@ -105,10 +132,25 @@ export class P2PRoom {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private closed = false;
   private everPolled = false;
+  private devKey = "";
   private lastPeersFingerprint = "";
+  private failStreak = 0;
+  private hidden = false;
+  private onVisibility?: () => void;
 
   constructor(opts: P2PRoomOptions) {
     this.opts = opts;
+    this.displayName = opts.name ?? "";
+    this.room = opts.room;
+  }
+
+  /** Room id currently joined (differs from opts.room after an overflow hop). */
+  get roomId(): string {
+    return this.room;
+  }
+
+  setDisplayName(name: string) {
+    this.displayName = name.slice(0, 14);
   }
 
   /**
@@ -123,7 +165,15 @@ export class P2PRoom {
       // First poll can fail transiently; the scheduled loop below retries.
     }
     if (this.closed) return;
-    this.schedulePoll(this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS);
+    this.hidden = typeof document !== "undefined" && document.hidden;
+    if (typeof document !== "undefined") {
+      this.onVisibility = () => {
+        this.hidden = document.hidden;
+        if (!this.hidden) this.schedulePoll(80);
+      };
+      document.addEventListener("visibilitychange", this.onVisibility);
+    }
+    this.schedulePoll(this.pollDelay());
     this.pingTimer = setInterval(() => {
       this.pingAll();
       this.watchdog();
@@ -134,6 +184,9 @@ export class P2PRoom {
     this.closed = true;
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.onVisibility && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+    }
     for (const slot of this.peers.values()) slot.pc.close();
     this.peers.clear();
     // Leaving the roster is the teardown broadcast: everyone's next poll
@@ -141,7 +194,7 @@ export class P2PRoom {
     void fetch("/api/rtc", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op: "leave", room: this.opts.room, peer: this.opts.selfId }),
+      body: JSON.stringify({ op: "leave", room: this.room, peer: this.opts.selfId }),
       keepalive: true,
     }).catch(() => {});
   }
@@ -169,6 +222,13 @@ export class P2PRoom {
 
   // ── signaling loop ─────────────────────────────────────────────────────────
 
+  private pollDelay(): number {
+    if (this.hopPending) return 60;
+    if (this.hidden) return HIDDEN_POLL_MS;
+    if (this.failStreak) return Math.min(12_000, 900 * 2 ** this.failStreak);
+    return this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS;
+  }
+
   private schedulePoll(delay: number): void {
     if (this.closed) return;
     if (this.pollTimer) clearTimeout(this.pollTimer);
@@ -186,22 +246,52 @@ export class P2PRoom {
   }
 
   private async pollOnce(): Promise<void> {
+    this.hopPending = false;
     const params = new URLSearchParams({
-      room: this.opts.room,
+      room: this.room,
       peer: this.opts.selfId,
-      name: this.opts.name ?? "",
+      name: this.displayName,
       since: String(this.cursor),
     });
     const res = await fetch(`/api/rtc?${params}`);
     if (this.closed) return;
+    if (res.status === 409) {
+      const full = (await res.json().catch(() => null)) as RtcPollResponse | null;
+      if (this.closed) return;
+      if (full?.full) {
+        this.moveToOverflow(full.suggestedRoom);
+        return;
+      }
+    }
     if (!res.ok) throw new Error(`signaling poll failed: ${res.status}`);
+    this.failStreak = 0;
     const body = (await res.json()) as RtcPollResponse;
     if (this.closed) return;
     if (!this.everPolled) {
       this.everPolled = true;
       this.opts.onConnected?.();
     }
+    if (body.dev && typeof body.room === "string" && body.room.length <= 100) {
+      // Dev testers: the server ignores the requested room, so adopt the real
+      // one for signal/leave POSTs and let the UI show "SALA 1 · DEV" and force
+      // the shared arena.
+      const arena = typeof body.devArena === "string" && body.devArena.length <= 32 ? body.devArena : null;
+      const key = `${body.room}|${arena ?? ""}`;
+      if (body.room !== this.room || key !== this.devKey) {
+        this.room = body.room;
+        this.devKey = key;
+        this.opts.onDevRoom?.(body.room, arena);
+      }
+    }
     this.reconcileRoster(body.peers);
+    if (body.hostId) {
+      this.opts.onRoom?.({
+        arena: body.arena ?? "",
+        mode: body.mode ?? "",
+        hostId: body.hostId,
+        host: body.hostId === this.opts.selfId,
+      });
+    }
     const roster = new Set(body.peers.map((p) => p.id));
     for (const sig of body.signals) {
       this.cursor = Math.max(this.cursor, sig.id);
@@ -210,14 +300,38 @@ export class P2PRoom {
     }
   }
 
+  /**
+   * The room is at capacity (we were not registered). Existing members are
+   * never kicked: this peer hops to the server-suggested overflow room,
+   * dropping any pairs/cursor that belonged to the previous room.
+   */
+  private moveToOverflow(suggested: string | null | undefined): void {
+    const next = typeof suggested === "string" && suggested.length <= 100 ? suggested : null;
+    if (!next || next === this.room || this.roomHops >= 32) {
+      // Every overflow room is full (or no hint): back off and retry.
+      this.failStreak = Math.min(6, this.failStreak + 1);
+      return;
+    }
+    this.roomHops += 1;
+    for (const slot of this.peers.values()) slot.pc.close();
+    this.peers.clear();
+    this.signalQueues.clear();
+    this.cursor = 0;
+    this.room = next;
+    this.emitPeers();
+    this.opts.onRoomChanged?.(next);
+    // Join the new room right away instead of waiting a full idle interval.
+    this.hopPending = true;
+  }
+
   private async poll(): Promise<void> {
     if (this.closed) return;
     try {
       await this.pollOnce();
     } catch {
-      // Transient poll failures are expected (tab sleep, deploy roll); retry.
+      this.failStreak = Math.min(6, this.failStreak + 1);
     }
-    this.schedulePoll(this.anyPairConnecting() ? FAST_POLL_MS : IDLE_POLL_MS);
+    this.schedulePoll(this.pollDelay());
   }
 
   private reconcileRoster(peers: { id: string; name: string }[]): void {
@@ -436,7 +550,8 @@ export class P2PRoom {
    */
   private sendSignal(to: string, kind: SignalKind, payload: unknown): Promise<void> {
     const prev = this.signalQueues.get(to) ?? Promise.resolve();
-    const next = prev.then(() => this.postSignal(to, kind, payload));
+    const room = this.room;
+    const next = prev.then(() => this.postSignal(to, kind, payload, room));
     this.signalQueues.set(
       to,
       next.catch(() => {}),
@@ -444,16 +559,17 @@ export class P2PRoom {
     return next;
   }
 
-  private async postSignal(to: string, kind: SignalKind, payload: unknown): Promise<void> {
+  private async postSignal(to: string, kind: SignalKind, payload: unknown, room: string): Promise<void> {
     for (let attempt = 0; ; attempt++) {
-      if (this.closed) return;
+      // Drop signals queued for a room we already left (overflow hop).
+      if (this.closed || room !== this.room) return;
       try {
         const res = await fetch("/api/rtc", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             op: "signal",
-            room: this.opts.room,
+            room,
             from: this.opts.selfId,
             to,
             kind,

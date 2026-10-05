@@ -1,13 +1,33 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
+const _upAxis = new THREE.Vector3(0, 1, 0);
+const _instDir = new THREE.Vector3();
+
 type BoxSpec = { x: number; y: number; z: number; w: number; h: number; d: number };
 
 const _dummy = new THREE.Object3D();
 const _p1 = new THREE.Vector3();
-const _p2 = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _sphere = new THREE.Sphere();
+
+function expandBoxFromDummy(geo: THREE.BufferGeometry, dummy: THREE.Object3D) {
+  const local = geo.boundingBox;
+  if (!local) return;
+  for (let x = 0; x <= 1; x++) {
+    for (let y = 0; y <= 1; y++) {
+      for (let z = 0; z <= 1; z++) {
+        _p1.set(
+          x ? local.max.x : local.min.x,
+          y ? local.max.y : local.min.y,
+          z ? local.max.z : local.min.z,
+        );
+        _p1.applyMatrix4(dummy.matrix);
+        _box.expandByPoint(_p1);
+      }
+    }
+  }
+}
 
 function packBatch(
   parent: THREE.Object3D,
@@ -15,16 +35,22 @@ function packBatch(
   geo: THREE.BufferGeometry,
   n: number,
   write: (i: number, dummy: THREE.Object3D) => void,
-  bounds?: THREE.Sphere,
 ): THREE.BatchedMesh {
+  if (!geo.boundingBox) geo.computeBoundingBox();
+  if (!geo.boundingSphere) geo.computeBoundingSphere();
   const pos = geo.getAttribute("position");
   const idx = geo.index;
   const vcount = pos ? pos.count : 24;
   const icount = idx ? idx.count : 36;
   const mesh = new THREE.BatchedMesh(n, vcount, icount, mat);
-  mesh.perObjectFrustumCulled = false;
-  mesh.frustumCulled = false;
+  // Opaque static scenery needs culling, not per-frame distance sorting.
+  mesh.sortObjects = mat.transparent;
+  mesh.frustumCulled = true;
+  mesh.perObjectFrustumCulled = true;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   const gid = mesh.addGeometry(geo);
+  _box.makeEmpty();
   for (let i = 0; i < n; i++) {
     const id = mesh.addInstance(gid);
     _dummy.position.set(0, 0, 0);
@@ -33,8 +59,12 @@ function packBatch(
     write(i, _dummy);
     _dummy.updateMatrix();
     mesh.setMatrixAt(id, _dummy.matrix);
+    expandBoxFromDummy(geo, _dummy);
   }
-  if (bounds) mesh.boundingSphere = bounds;
+  mesh.boundingBox = _box.clone();
+  mesh.boundingSphere = _box.getBoundingSphere(_sphere.clone());
+  mesh.computeBoundingBox();
+  mesh.computeBoundingSphere();
   parent.add(mesh);
   return mesh;
 }
@@ -55,17 +85,11 @@ export class BoxBatch {
 
   build(parent: THREE.Object3D) {
     for (const [mat, items] of this.buckets) {
-      _box.makeEmpty();
       const mesh = packBatch(parent, mat, this.geo, items.length, (i, dummy) => {
         const it = items[i]!;
         dummy.position.set(it.x, it.y, it.z);
         dummy.scale.set(it.w, it.h, it.d);
-        _p1.set(it.x - it.w * 0.5, it.y - it.h * 0.5, it.z - it.d * 0.5);
-        _p2.set(it.x + it.w * 0.5, it.y + it.h * 0.5, it.z + it.d * 0.5);
-        _box.expandByPoint(_p1);
-        _box.expandByPoint(_p2);
       });
-      mesh.boundingSphere = _box.getBoundingSphere(_sphere.clone());
       this.meshes.push(mesh);
     }
   }
@@ -73,6 +97,46 @@ export class BoxBatch {
   dispose() {
     this.geo.dispose();
   }
+}
+
+/** Cubiertas horizontales: UV en metros de mundo, sin merge de Planes (el dispose compartía buffers). */
+export function stampDecks(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number; w: number; d: number }>,
+  metersPerTile = 2.15,
+): { mesh: THREE.Mesh; geo: THREE.BufferGeometry } {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  let base = 0;
+  for (const it of items) {
+    const x0 = it.x - it.w * 0.5;
+    const x1 = it.x + it.w * 0.5;
+    const z0 = it.z - it.d * 0.5;
+    const z1 = it.z + it.d * 0.5;
+    const y = it.y;
+    positions.push(x0, y, z0, x0, y, z1, x1, y, z1, x1, y, z0);
+    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+    uvs.push(x0 / metersPerTile, z0 / metersPerTile, x0 / metersPerTile, z1 / metersPerTile, x1 / metersPerTile, z1 / metersPerTile, x1 / metersPerTile, z0 / metersPerTile);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    base += 4;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.receiveShadow = false;
+  mesh.castShadow = false;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 1;
+  parent.add(mesh);
+  return { mesh, geo };
 }
 
 export function instancePlanes(
@@ -86,7 +150,22 @@ export function instancePlanes(
     dummy.position.set(it.x, it.y, it.z);
     dummy.rotation.set(0, it.ry, 0);
     dummy.scale.set(it.s, it.s, 1);
-  }, new THREE.Sphere(new THREE.Vector3(0, 5, 0), 70));
+  });
+  return { mesh, geo };
+}
+
+export function instanceDiscs(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  radius: number,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.CircleGeometry(radius, 24);
+  geo.rotateX(-Math.PI / 2);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
+  });
   return { mesh, geo };
 }
 
@@ -97,12 +176,46 @@ export function instanceCylinders(
   rTop: number,
   rBot: number,
   h: number,
+  radialSegments = 16,
 ): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
-  const geo = new THREE.CylinderGeometry(rTop, rBot, h, 16);
+  const geo = new THREE.CylinderGeometry(rTop, rBot, h, radialSegments);
   const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
     const it = items[i]!;
     dummy.position.set(it.x, it.y, it.z);
-  }, new THREE.Sphere(new THREE.Vector3(0, 0.1, 0), 60));
+  });
+  return { mesh, geo };
+}
+
+export function instanceCones(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  rBot: number,
+  h: number,
+  radialSegments = 12,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.ConeGeometry(rBot, h, radialSegments);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
+  });
+  return { mesh, geo };
+}
+
+/** Copas de follaje: UV esféricas para que se lea la textura de hojas. */
+export function instanceIcosahedrons(
+  parent: THREE.Object3D,
+  mat: THREE.Material,
+  items: Array<{ x: number; y: number; z: number }>,
+  radius: number,
+  scaleY = 1.18,
+): { mesh: THREE.BatchedMesh; geo: THREE.BufferGeometry } {
+  const geo = new THREE.IcosahedronGeometry(radius, 1);
+  const mesh = packBatch(parent, mat, geo, items.length, (i, dummy) => {
+    const it = items[i]!;
+    dummy.position.set(it.x, it.y, it.z);
+    dummy.scale.set(1, scaleY, 1);
+  });
   return { mesh, geo };
 }
 
@@ -126,7 +239,10 @@ export function bakeMeshes(group: THREE.Group, mat: THREE.Material): void {
     m.geometry.dispose();
     group.remove(m);
   }
-  group.add(new THREE.Mesh(merged, mat));
+  const baked = new THREE.Mesh(merged, mat);
+  baked.castShadow = true;
+  baked.receiveShadow = true;
+  group.add(baked);
 }
 
 export class BeamBatch {
@@ -165,7 +281,7 @@ export class BeamBatch {
       fog: false,
     });
     this.mesh = new THREE.LineSegments(geo, mat);
-    this.mesh.frustumCulled = false;
+    this.mesh.frustumCulled = true;
     this.mesh.renderOrder = 6;
   }
 
@@ -245,7 +361,8 @@ export class InstancePool {
     this.max = max;
     this.mesh = new THREE.InstancedMesh(geo, mat, max);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.mesh.frustumCulled = false;
+    this.mesh.frustumCulled = true;
+    this.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 2, 0), 90);
     this.color.setRGB(1, 1, 1);
     this.mesh.setColorAt(0, this.color);
     this.dummy.scale.set(0, 0, 0);
@@ -273,10 +390,10 @@ export class InstancePool {
     return i;
   }
 
-  move(i: number, x: number, y: number, z: number) {
+  move(i: number, x: number, y: number, z: number, dx = 0, dy = 1, dz = 0, scale = 1) {
     this.dummy.position.set(x, y, z);
-    this.dummy.rotation.set(0, 0, 0);
-    this.dummy.scale.setScalar(1);
+    this.dummy.quaternion.setFromUnitVectors(_upAxis, _instDir.set(dx, dy, dz).normalize());
+    this.dummy.scale.setScalar(scale);
     this.dummy.updateMatrix();
     this.mesh.setMatrixAt(i, this.dummy.matrix);
   }

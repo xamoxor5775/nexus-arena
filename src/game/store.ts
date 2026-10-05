@@ -1,15 +1,48 @@
 import { create } from "zustand";
-import { DEFAULT_SETTINGS } from "./constants";
-import { SETTINGS_KEY } from "./constants";
-import type { HudSnapshot, Screen, Settings } from "./types";
+import { DEFAULT_SETTINGS, isPlaceholderPilotName, normalizeArena, normalizeMode, normalizeTouchHand, normalizeTouchOrder, randomPilotName, sanitizePilotName, SETTINGS_KEY } from "./constants";
+import { lockSettings, patchLocked, persistable, unlockSettings, type DevLock } from "./dev-lock";
+import { normalizeQuality } from "./graphics";
+import type { ArenaId, HudSnapshot, Screen, Settings } from "./types";
+
+function persistSettings(settings: Settings) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    /* ignore */
+  }
+}
+
+function withPilotName(settings: Settings, rawName: string | undefined): Settings {
+  const name = isPlaceholderPilotName(rawName) ? randomPilotName() : sanitizePilotName(rawName);
+  return { ...settings, name };
+}
 
 function loadSettings(): Settings {
   try {
+    if (typeof localStorage === "undefined") return withPilotName({ ...DEFAULT_SETTINGS }, undefined);
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    if (!raw) {
+      const settings = withPilotName({ ...DEFAULT_SETTINGS }, undefined);
+      persistSettings(settings);
+      return settings;
+    }
+    const parsed = JSON.parse(raw) as Partial<Settings> & { mode?: string };
+    const settings = withPilotName(
+      {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        mode: normalizeMode(parsed.mode),
+        arena: normalizeArena(parsed.arena),
+        touchHand: normalizeTouchHand(parsed.touchHand),
+        touchOrder: normalizeTouchOrder(parsed.touchOrder),
+        quality: normalizeQuality(parsed.quality),
+      },
+      parsed.name,
+    );
+    if (settings.name !== parsed.name) persistSettings(settings);
+    return settings;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return withPilotName({ ...DEFAULT_SETTINGS }, undefined);
   }
 }
 
@@ -23,6 +56,12 @@ const emptyHud: HudSnapshot = {
   frags: 0,
   deaths: 0,
   fragLimit: 15,
+  mode: "dm",
+  capLimit: 3,
+  teamScore: { ion: 0, ember: 0 },
+  flags: [],
+  playerTeam: null,
+  carrying: null,
   countdown: null,
   pickup: null,
   hitmarker: 0,
@@ -35,6 +74,18 @@ const emptyHud: HudSnapshot = {
   speed: 0,
   alive: true,
   powers: [],
+  roundSeconds: 0,
+  credits: 0,
+  score: 0,
+  level: 1,
+  xp: 0,
+  xpNeed: 500,
+  prize: null,
+  leveled: false,
+  grenades: 2,
+  aiming: false,
+  scope: null,
+  streak: 0,
 };
 
 export type ArenaStore = {
@@ -44,12 +95,18 @@ export type ArenaStore = {
   showBoard: boolean;
   isTouch: boolean;
   best: number;
+  roomHost: boolean;
+  /** Dev room arena lock (null = normal player). See dev-lock.ts. */
+  devLock: DevLock | null;
   setScreen: (s: Screen) => void;
   setHud: (h: HudSnapshot) => void;
   patchSettings: (p: Partial<Settings>) => void;
   setShowBoard: (v: boolean) => void;
   setTouch: (v: boolean) => void;
   setBest: (n: number) => void;
+  setRoomHost: (v: boolean) => void;
+  /** Force `arena` + deathmatch (dev room), or pass null to restore the player's pick. */
+  setDevArena: (arena: ArenaId | null) => void;
 };
 
 export const useArena = create<ArenaStore>((set, get) => ({
@@ -59,18 +116,30 @@ export const useArena = create<ArenaStore>((set, get) => ({
   showBoard: false,
   isTouch: false,
   best: 0,
+  roomHost: true,
+  devLock: null,
   setScreen: (screen) => set({ screen }),
   setHud: (hud) => set({ hud, showBoard: hud.alive ? get().showBoard : get().showBoard }),
   patchSettings: (p) => {
-    const settings = { ...get().settings, ...p };
+    const { devLock } = get();
+    const next = patchLocked(get().settings, p, devLock);
+    if ("name" in p) next.name = sanitizePilotName(next.name);
+    const settings = next;
     set({ settings });
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    } catch {
-      /* ignore */
-    }
+    persistSettings(persistable(settings, devLock));
   },
   setShowBoard: (showBoard) => set({ showBoard }),
   setTouch: (isTouch) => set({ isTouch }),
   setBest: (best) => set({ best }),
+  setRoomHost: (roomHost) => set({ roomHost }),
+  setDevArena: (arena) => {
+    const { settings, devLock } = get();
+    if (arena === null) {
+      if (devLock) set({ settings: unlockSettings(settings, devLock), devLock: null });
+      return;
+    }
+    if (devLock?.arena === arena && settings.arena === arena && settings.mode === "dm") return;
+    const next = lockSettings(settings, arena, devLock);
+    set({ settings: next.settings, devLock: next.lock });
+  },
 }));

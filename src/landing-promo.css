@@ -1,0 +1,77 @@
+/* Promo sections below the landing features (soundtrack, arenas, arsenal, repeat CTA).
+ * Loaded with the lazily imported landing-promo chunk, never on first paint. */
+.promo { position: relative; z-index: 1; max-width: 1240px; margin: auto; padding: 0 clamp(14px, 5vw, 70px); }
+.promo-section { padding: 64px 0 8px; }
+.promo-head { max-width: 720px; margin: 0 auto 26px; text-align: center; }
+.promo-head h2, .promo-cta h2 { margin: 12px 0 10px; font: 700 clamp(2rem, 4.6vw, 3.4rem)/.92 var(--font-display); letter-spacing: -.03em; text-transform: uppercase; text-shadow: 0 5px 30px #050609cc; }
+.promo-lede { max-width: 620px; margin: 0 auto; color: #c8bfad; font-size: 15px; line-height: 1.55; }
+.promo-note { margin-top: 12px; color: #a09888; font: 10px var(--font-mono); letter-spacing: .08em; text-align: center; }
+
+/* Soundtrack */
+.promo-tracks { max-width: 680px; margin: 0 auto; padding: 0; list-style: none; border: 1px solid #2c3038; background: #111319e6; }
+.promo-tracks li { display: grid; grid-template-columns: 44px 26px 1fr auto auto; align-items: center; gap: 12px; min-height: 64px; padding: 10px 16px 10px 10px; border-top: 1px solid #2c3038; }
+.promo-tracks li:first-child { border-top: 0; }
+.promo-tracks button { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #3ae8d2; color: #3ae8d2; background: #08090c; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.promo-tracks button:hover, .promo-tracks .is-playing button { color: #08090c; background: #3ae8d2; box-shadow: 0 0 18px #3ae8d266; }
+.promo-tracks button svg { width: 18px; height: 18px; }
+.promo-track-num { color: #756f64; font: 11px var(--font-mono); }
+.promo-track-title { overflow: hidden; font: 700 20px var(--font-display); letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; text-overflow: ellipsis; }
+.promo-tracks .is-playing .promo-track-title { color: #3ae8d2; }
+.promo-track-len { color: #a09888; font: 11px var(--font-mono); }
+.promo-track-eq { display: flex; align-items: flex-end; gap: 3px; height: 16px; opacity: 0; }
+.promo-track-eq i { display: block; width: 3px; height: 30%; background: #3ae8d2; }
+.promo-tracks .is-playing .promo-track-eq { opacity: 1; }
+.promo-tracks .is-playing .promo-track-eq i { animation: promo-eq .8s ease-in-out infinite alternate; }
+.promo-tracks .is-playing .promo-track-eq i:nth-child(2) { animation-delay: -.3s; }
+.promo-tracks .is-playing .promo-track-eq i:nth-child(3) { animation-delay: -.55s; }
+.promo-tracks .is-playing .promo-track-eq i:nth-child(4) { animation-delay: -.15s; }
+@keyframes promo-eq { from { height: 20%; } to { height: 100%; } }
+@media (prefers-reduced-motion: reduce) { .promo-tracks .is-playing .promo-track-eq i { animation: none; height: 70%; } }
+
+/* Arenas */
+.promo-arenas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.promo-arena { position: relative; overflow: hidden; border: 1px solid #2c3038; background: #111319; }
+.promo-arena::after { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; content: ""; background: var(--rail); box-shadow: 0 0 14px var(--rail); }
+.promo-arena img { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; object-fit: cover; background: #0b0d11; transition: transform .4s ease; }
+.promo-arena:hover img { transform: scale(1.04); }
+.promo-arena div { position: absolute; left: 0; right: 0; bottom: 0; padding: 40px 14px 14px; background: linear-gradient(180deg, transparent, #08090ce6 70%); }
+.promo-arena h3 { margin: 0; font: 700 24px/1 var(--font-display); text-transform: uppercase; }
+.promo-arena p { margin-top: 4px; color: var(--rail); font: 11px var(--font-mono); letter-spacing: .06em; }
+
+/* Arsenal */
+.promo-weapons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border: 1px solid #2c3038; background: #2c3038; }
+.promo-weapon { display: flex; gap: 14px; padding: 16px; background: #111319; }
+.promo-weapon img { flex: none; width: 64px; height: 64px; border: 1px solid #2c3038; background: #08090c; box-shadow: inset 0 -2px 0 var(--weapon); }
+.promo-weapon-body { min-width: 0; flex: 1; }
+.promo-weapon-kind { color: var(--weapon); font: 700 9px var(--font-mono); letter-spacing: .14em; }
+.promo-weapon h3 { margin: 2px 0 0; font: 700 22px/1 var(--font-display); letter-spacing: .02em; }
+.promo-weapon p { margin-top: 4px; color: #a09888; font-size: 12.5px; line-height: 1.35; }
+.promo-weapon dl { display: flex; gap: 14px; margin: 8px 0 0; }
+.promo-weapon dt { color: #756f64; font: 9px var(--font-mono); letter-spacing: .1em; }
+.promo-weapon dd { margin: 1px 0 0; color: #f6f0e2; font: 600 13px var(--font-mono); }
+.promo-weapon dd small { color: #756f64; font-size: 10px; }
+
+/* Repeat CTA */
+.promo-cta { padding: 72px 0 64px; text-align: center; }
+.promo-cta h2 em { color: #e24a2b; font-style: normal; }
+.promo-cta-actions { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px; margin-top: 26px; }
+.promo-cta-actions .landing-demo { margin-top: 0; min-height: 62px; }
+
+@media (max-width: 900px) {
+  .promo-arenas, .promo-weapons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .promo-section { padding-top: 48px; }
+  .promo-head { margin-bottom: 18px; }
+  .promo-lede { font-size: 14px; }
+  .promo-tracks li { grid-template-columns: 44px 1fr auto; gap: 10px; padding-right: 12px; }
+  .promo-track-num, .promo-track-eq { display: none; }
+  .promo-track-title { font-size: 18px; }
+  .promo-arenas { grid-template-columns: 1fr; gap: 10px; }
+  .promo-arena img { aspect-ratio: 2 / 1; }
+  .promo-weapons { grid-template-columns: 1fr; }
+  .promo-weapon { padding: 14px 12px; }
+  .promo-cta { padding: 56px 0 48px; }
+  .promo-cta-actions { display: grid; gap: 10px; }
+  .promo-cta-actions .landing-buy, .promo-cta-actions .landing-demo { width: 100%; }
+}
