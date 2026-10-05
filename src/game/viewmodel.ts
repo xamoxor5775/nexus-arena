@@ -2,7 +2,7 @@ import * as THREE from "three";
 import type { WeaponId } from "./types";
 import { WEAPON_META } from "./constants";
 import { gunMetalTex, loadTex, pixelWeaponTex, weaponPlateFile } from "./textures";
-import { hasWeaponPack, mountPackView, mountPackWorld, packPose, packRotation } from "./weaponPack";
+import { hasViewPack, hasWeaponPack, mountPackView, mountPackWorld, packPose, packRotation } from "./weaponPack";
 
 const LAYER = 1;
 
@@ -517,7 +517,8 @@ const VM_SCALE: Record<WeaponId, number> = {
   martillo: 0.78,
 };
 
-export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color): THREE.Group {
+/** `skinId` previews a specific desktop skin (default: the selected one). */
+export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color, skinId?: string): THREE.Group {
   const col = accent;
   const tint = WEAPON_TINT[id];
   const k: Kit = {
@@ -558,7 +559,7 @@ export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color): TH
   }
   g.scale.setScalar(VM_SCALE[id]);
   g.layers.set(LAYER);
-  if (hasWeaponPack(id)) {
+  if (hasViewPack(id, skinId)) {
     // Imported models already have individual physical sizes; don't scale twice.
     g.scale.setScalar(1);
     fallback.scale.setScalar(VM_SCALE[id]);
@@ -566,8 +567,8 @@ export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color): TH
     const slot = new THREE.Group();
     slot.name = "pack";
     g.add(slot);
-    mountPackView(slot, id, muzzle, fallback);
-    g.rotation.copy(packRotation(id));
+    mountPackView(slot, id, muzzle, fallback, skinId);
+    g.rotation.copy(packRotation(id, skinId));
   } else {
     g.rotation.y = 0.02;
     g.rotation.z = -0.018;
@@ -576,7 +577,7 @@ export function buildViewmodel(id: WeaponId, accent = WEAPON_META[id].color): TH
 }
 
 export function restPose(id: WeaponId): THREE.Vector3 {
-  if (hasWeaponPack(id)) {
+  if (hasViewPack(id)) {
     return packPose(id);
   }
   if (id === "lance") return new THREE.Vector3(0.282, -0.228, -0.58);
@@ -591,7 +592,7 @@ export function restPose(id: WeaponId): THREE.Vector3 {
 }
 
 export function adsPose(id: WeaponId): THREE.Vector3 {
-  if (hasWeaponPack(id)) {
+  if (hasViewPack(id)) {
     return packPose(id, true);
   }
   if (id === "lance") return new THREE.Vector3(0.02, -0.255, -0.64);

@@ -3,7 +3,7 @@ import { boxAt } from "./collision";
 import type { AABB, ItemPad, JumpPad, Spawn } from "./types";
 import { BoxBatch, stampDecks } from "./instancing";
 import { createArenaLights } from "./lighting";
-import { isLoDevice, loadSkyTex, loadTex, skySphereGeo } from "./textures";
+import { isLoDevice, loadArenaSurface, loadSkyTex, skySphereGeo } from "./textures";
 import { stampJumpPads, type ArenaData } from "./arena";
 import { ROUND_SECONDS } from "./constants";
 
@@ -19,7 +19,7 @@ export function buildMar(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): Ar
   const mats: THREE.Material[] = [];
   const geos: THREE.BufferGeometry[] = [];
 
-  const floorTex = loadTex("/textures/surfaces/mar-deck-plomo.webp", 1, 1);
+  const floorTex = loadArenaSurface("mar");
   const floorMat = new THREE.MeshLambertMaterial({ map: floorTex, color: 0xffffff });
   const hullMat = new THREE.MeshLambertMaterial({ color: 0x8e969e });
   const edgeMat = new THREE.MeshLambertMaterial({ color: 0x3a4248 });

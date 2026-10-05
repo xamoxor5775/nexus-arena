@@ -27,6 +27,10 @@ logs/*
 *.bak
 *.orig
 *.backup
+*.backup-*
+*.bak-*
+skin-store.bak
+*.bak-pre-*
 backups/
 data/
 pglite*/

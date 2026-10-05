@@ -141,6 +141,10 @@
   .thanks-lede { max-width: 34rem; color: #c8bfad; font-size: 17px; line-height: 1.55; }
   .thanks-status { margin-top: 18px; color: #8cff72; font: 12px var(--font-mono); line-height: 1.5; }
   .thanks-actions { margin-top: 22px; }
+  .thanks-recover { display: flex; gap: 8px; margin-top: 18px; }
+  .thanks-recover input { flex: 1; min-width: 0; padding: 12px; border: 1px solid #2c3038; color: #f6f0e2; background: #111319; font: 13px var(--font-mono); }
+  .thanks-recover button { padding: 0 14px; border: 0; color: #08090c; background: #3ae8d2; font: 700 11px var(--font-mono); letter-spacing: .06em; cursor: pointer; }
+  .landing-recover { margin-top: 10px; padding: 0; border: 0; background: none; color: #3ae8d2; cursor: pointer; font: 700 11px var(--font-mono); letter-spacing: .08em; }
   .landing-shell { position: relative; min-height: 100dvh; height: 100dvh; overflow-x: hidden; overflow-y: auto; scroll-behavior: smooth; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; background: #090a0d url("/media/nexus-acceso-fondo.jpg") center 30% / cover fixed; color: #f6f0e2; font-family: var(--font-sans); }
   .landing-shell::before { position: fixed; inset: 0; z-index: 0; pointer-events: none; content: ""; background: linear-gradient(180deg, #05060988 0%, #08090d99 42%, #08090de8 100%); }
   .landing-grid { position: absolute; inset: 0; z-index: 0; opacity: .18; background-image: linear-gradient(#2c3038 1px, transparent 1px), linear-gradient(90deg, #2c3038 1px, transparent 1px); background-size: 72px 72px; mask-image: linear-gradient(180deg, black, transparent 90%); }
@@ -163,6 +167,18 @@
 
   .nx-game-shell { height: 100vh; height: -webkit-fill-available; min-height: 100%; touch-action: manipulation; }
   @supports (height: 100dvh) { .nx-game-shell { height: 100dvh; min-height: 100dvh; } }
+  .nx-arena-loading { position: absolute; inset: 0; z-index: 80; overflow: hidden; background: #06090c; color: #f5f0e5; }
+  .nx-arena-loading > img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+  .nx-arena-loading-shade { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 52%, rgba(3, 7, 10, 0.2) 66%, rgba(3, 7, 10, 0.88) 100%); }
+  .nx-arena-loading-status { position: absolute; left: 50%; bottom: clamp(1.2rem, 5vh, 4rem); width: min(38rem, calc(100% - 2rem)); transform: translateX(-50%); padding: 0.85rem 1rem; border: 1px solid rgba(105, 244, 225, 0.58); background: rgba(4, 10, 13, 0.86); box-shadow: 0 0 30px rgba(58, 232, 210, 0.15); font-family: var(--font-mono); text-align: center; }
+  .nx-arena-loading-status p { margin: 0 0 0.55rem; color: #f5f0e5; font-weight: 800; letter-spacing: 0.12em; }
+  .nx-arena-loading-track { height: 0.55rem; overflow: hidden; border: 1px solid rgba(129, 255, 237, 0.72); background: rgba(3, 8, 10, 0.82); }
+  .nx-arena-loading-track i { display: block; height: 100%; background: linear-gradient(90deg, #2dbdad, #b4fff4); box-shadow: 0 0 14px #59e9d8; transition: width 120ms linear; }
+  .nx-arena-loading-status span { display: block; margin-top: 0.5rem; color: #99d8d0; font-size: 0.66rem; letter-spacing: 0.12em; }
+  @media (max-width: 640px) {
+    .nx-arena-loading > img { object-position: center; }
+    .nx-arena-loading-status { bottom: max(1rem, env(safe-area-inset-bottom)); }
+  }
 
   .touch-controls {
     --safe-top: 0px;
@@ -922,6 +938,18 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .nx-quality-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  @media (min-width: 720px) {
+    .nx-quality-row {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+  }
+
   @media (min-width: 420px) {
     .nx-pick-maps {
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1253,6 +1281,28 @@
     }
   }
 
+  /* Dev room (SALA 1 · DEV): arena and mode fixed by the server. */
+  .nx-arena-card.is-locked {
+    opacity: 0.58;
+    filter: grayscale(0.86) saturate(0.55);
+    cursor: not-allowed;
+  }
+  .nx-pick.is-locked {
+    opacity: 0.38;
+    filter: grayscale(1);
+    cursor: not-allowed;
+  }
+  .nx-arena-card.is-locked::before {
+    background:
+      linear-gradient(180deg, rgba(4, 9, 12, 0.1), rgba(4, 9, 12, 0.76)),
+      repeating-linear-gradient(135deg, transparent 0 10px, rgba(255, 255, 255, 0.025) 10px 12px);
+  }
+  .nx-arena-card.is-locked .nx-arena-card-go {
+    color: #d8d0c2;
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    line-height: 1.15;
+  }
   .nx-arena-card {
     --arena-rail: #3ae8d2;
     position: relative;
@@ -1864,8 +1914,8 @@
     font-size: 2.2rem;
   }
 
-  .nx-game-shell .nx-hud-ammo > div,
-  .nx-game-shell .nx-hud-ammo > p:last-child {
+  .nx-game-shell .nx-hud-ammo .nx-radio-dock,
+  .nx-game-shell .nx-hud-ammo .nx-weapon-strip {
     display: none;
   }
 
@@ -1985,4 +2035,68 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+.nx-demo-input { min-height: 46px; padding: 0 13px; border: 1px solid #2c3038; outline: 0; color: #f6f0e2; background: #111319; font: 13px var(--font-mono); }
+.nx-demo-input::placeholder { color: #8b867d; }
+.nx-demo-buy { min-height: 50px; padding: 0 14px; border: 0; color: #08090c; background: #3ae8d2; font: 700 11px var(--font-mono); letter-spacing: .06em; cursor: pointer; }
+.nx-demo-buy:disabled { opacity: .55; cursor: wait; }
+/* Combat telemetry: static CSS only; no blur, filters, loops or WebGL changes. */
+.nx-hud-ammo { width: 280px; display: flex; flex-direction: column; gap: 10px; }
+.nx-radio-dock {
+  display: flex; align-items: center; gap: 2px; min-width: 0;
+  padding: 3px 6px; border: 1px solid #316667; border-left: 3px solid #3ae8d2;
+  background: #081519ed; text-align: left;
+}
+.nx-radio-dock > div { flex: 1; overflow: hidden; }
+.nx-radio-dock button { flex: 0 0 44px; }
+.nx-radio-dock button:hover, .nx-radio-dock button:focus-visible { background: #173b40; outline: 1px solid #3ae8d2; }
+.nx-game-shell > .nx-radio-dock { position: absolute; right: 24px; bottom: 24px; z-index: 30; max-width: 280px; }
+.nx-ammo-panel {
+  --ammo-accent: #53f4dc;
+  padding: 12px; border: 1px solid #386366; border-top: 3px solid var(--ammo-accent);
+  background: #071216f2; color: #f3fafb; text-align: left;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.nx-ammo-panel[data-ammo-state="low"] { --ammo-accent: #ffd275; }
+.nx-ammo-panel[data-ammo-state="empty"] { --ammo-accent: #ff9c87; }
+.nx-ammo-heading { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; letter-spacing: .1em; }
+.nx-ammo-status { color: var(--ammo-accent); font-size: 9px; letter-spacing: .04em; }
+.nx-ammo-readout { display: flex; justify-content: space-between; align-items: end; margin: 10px 0 8px; }
+.nx-ammo-label { display: block; font-size: 9px; letter-spacing: .13em; color: #bad0d6; }
+.nx-ammo-readout p { display: flex; align-items: baseline; gap: 7px; }
+.nx-ammo-count { font: 700 52px/.98 var(--font-display); color: var(--ammo-accent); }
+.nx-ammo-capacity { color: #bad0d6; font-size: 15px; }
+.nx-ammo-reserve { border-left: 1px solid #355259; padding-left: 16px; min-width: 78px; }
+.nx-ammo-reserve strong { display: block; font: 700 30px/1.3 var(--font-display); }
+.nx-ammo-meter { height: 5px; background: #293a41; overflow: hidden; }
+.nx-ammo-meter > span { display: block; height: 100%; background: var(--ammo-accent); }
+.nx-melee-readout { min-height: 80px; display: flex; flex-direction: column; justify-content: center; color: var(--ammo-accent); font-size: 17px; }
+.nx-melee-readout span { color: #bad0d6; font-size: 11px; margin-top: 5px; }
+.nx-weapon-strip { display: flex; gap: 4px; justify-content: space-between; margin: 12px 0; }
+.nx-weapon-strip .nx-wep-slot { flex: 1; min-width: 0; height: 32px; box-shadow: none; }
+.nx-weapon-strip .nx-wep-slot.is-hot { border: 2px solid #53f4dc; background: #193c40; }
+.nx-weapon-strip .nx-wep-slot.is-empty { opacity: .48; filter: none; }
+.nx-weapon-strip .nx-wep-slot b { background: #071216; padding: 0 2px; font-size: 10px; text-shadow: none; }
+.nx-grenade-readout { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #30474e; padding-top: 8px; font-size: 10px; color: #bed2d7; }
+.nx-grenade-readout kbd { border: 1px solid #54767e; padding: 1px 4px; margin-right: 5px; color: #f3fafb; }
+.nx-grenade-readout strong { font-size: 18px; color: #53f4dc; line-height: 1; }
+.nx-hud-health { padding: 10px 12px; background: #071216e8; border: 1px solid #355259; border-left: 3px solid #7edc6a; font-variant-numeric: tabular-nums; }
+.nx-hud-round, .nx-hud-frags { padding: 7px 10px; background: #071216d9; border-bottom: 1px solid #41676d; }
+@media (max-width: 639px) and (pointer: fine) {
+  .nx-hud-ammo { width: 230px; right: 12px; bottom: 16px; }
+  .nx-hud-health { bottom: 320px; left: 12px; }
+}
+@media (pointer: coarse), (any-pointer: coarse) {
+  .nx-game-shell .nx-hud-ammo { width: 192px; }
+  .nx-ammo-panel { padding: 8px; }
+  .nx-ammo-heading { font-size: 11px; letter-spacing: .04em; }
+  .nx-ammo-status { font-size: 8px; }
+  .nx-ammo-readout { margin: 6px 0; }
+  .nx-ammo-count { font-size: 38px; }
+  .nx-ammo-reserve { min-width: 60px; padding-left: 8px; }
+  .nx-ammo-reserve strong { font-size: 24px; }
+  .nx-grenade-readout { margin-top: 6px; padding-top: 6px; }
+  .nx-hud-health { padding: 6px 8px; }
+  .nx-hud-health .nx-vita { width: 120px; }
+  .nx-melee-readout { min-height: 66px; font-size: 14px; }
 }

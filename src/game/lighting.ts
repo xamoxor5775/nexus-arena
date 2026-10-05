@@ -158,6 +158,11 @@ export function createArenaLights(
 
   const ambient = new THREE.AmbientLight(space ? 0x2c3c50 : sea ? 0x87afc6 : lave ? 0x5a3020 : 0x5a4034, moon ? 0.42 : sea ? 0.32 : 0.22);
   scene.add(ambient);
+  // A constant diffuse floor keeps ceilings/vertical cover readable at night and
+  // in reduced mode. Ambient lights accumulate into one uniform: no shadow pass.
+  const visibilityFill = new THREE.AmbientLight(0xb8c6d8, pozoCycle || lave ? 0.55 : 0.35);
+  visibilityFill.name = "arena-readability-fill";
+  scene.add(visibilityFill);
 
   const muzzle = new THREE.PointLight(0xffe0a0, 0, 14, 1.8);
   muzzle.castShadow = false;
@@ -500,7 +505,8 @@ export function createArenaLights(
   }
 
   function dispose() {
-    scene.remove(hemi, sun, sun.target, bounce, rim, ambient, muzzle, sunCore, corona, halo, sting, sunLamp);
+    scene.remove(hemi, sun, sun.target, bounce, rim, ambient, visibilityFill, muzzle, sunCore, corona, halo, sting, sunLamp);
+    sun.shadow.dispose();
     sunCore.geometry.dispose();
     (sunCore.material as THREE.Material).dispose();
     (corona.material as THREE.Material).dispose();

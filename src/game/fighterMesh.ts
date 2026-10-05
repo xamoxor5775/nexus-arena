@@ -229,8 +229,8 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   const { metal, visor: visorTex, boot: bootTex, skin: skinTex, armor: armorTex, cyan: cyanTex } = maps();
   const root = new THREE.Group();
   const gltfBust = kit === 4;
-  // 5 stellar sentinel, 6 chibi, 7-10 roster models (cowboy, venom, cowgirl, goku)
-  const gltfFull = kit >= 5 && kit <= 10;
+  // 5 stellar sentinel, 6 chibi, 7-14 roster models (cowboy..goku + 4 new CC-BY bots)
+  const gltfFull = kit >= 5 && kit <= 14;
   const gltfKit = gltfBust || gltfFull;
   const k = gltfKit ? 1 : kit % 4;
   const wide = k === 0 ? 1.08 : k === 1 ? 0.9 : k === 3 ? 0.96 : 1;
@@ -452,7 +452,7 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   if (gltfBust) attachAlienGltf(torso, head, root);
   if (kit === 5) attachSentinelGltf(root, head);
   if (kit === 6) attachChibiGltf(root, head);
-  if (kit >= 7 && kit <= 10) attachBotModel(root, head, kit);
+  if (kit >= 7 && kit <= 14) attachBotModel(root, head, kit);
   return root;
 }
 

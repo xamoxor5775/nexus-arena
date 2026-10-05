@@ -4,7 +4,7 @@ import type { ArenaData } from "./arena";
 import { stampJumpPads } from "./arena";
 import { BoxBatch, instanceCylinders, stampDecks } from "./instancing";
 import { createArenaLights } from "./lighting";
-import { loadSpaceSky, loadTex, portalTex, skySphereGeo } from "./textures";
+import { loadArenaSurface, loadSpaceSky, loadTex, portalTex, skySphereGeo } from "./textures";
 import type { AABB, FlagPad, ItemPad, JumpPad, Spawn, TeleportGate } from "./types";
 
 function addBox(
@@ -37,7 +37,7 @@ export function buildMoon(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   const geos: THREE.BufferGeometry[] = [];
   const batch = new BoxBatch();
 
-  const dust = loadTex("/textures/moon/piso-luna.webp", 1, 1);
+  const dust = loadArenaSurface("luna");
   const crater = loadTex("/textures/moon/crateres.webp", 1, 1);
   const oxide = loadTex("/textures/moon/oxido.webp", 1, 1);
   const brick = loadTex("/textures/crypt-brick.jpg", 3.2, 2.2);
@@ -212,7 +212,7 @@ export function buildMoon(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   const moonR = 70;
   const moonGeo = new THREE.SphereGeometry(moonR, 48, 32);
   const moonMat = new THREE.MeshLambertMaterial({
-    map: loadTex("/textures/moon/piso-luna.webp", 8, 5),
+    map: loadArenaSurface("luna", 8, 5),
     color: 0xffffff,
     emissive: 0x1c1814,
     emissiveIntensity: 0.08,

@@ -84,7 +84,7 @@ class ArenaRadio {
   private attach() {
     if (this.el) return this.el;
     const el = new Audio();
-    el.preload = "auto";
+    el.preload = "none";
     el.volume = this.volume;
     el.addEventListener("ended", () => this.next());
     el.addEventListener("playing", () => {

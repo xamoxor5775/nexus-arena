@@ -3,7 +3,7 @@ import { boxAt } from "./collision";
 import { stampJumpPads, type ArenaData } from "./arena";
 import { BoxBatch, instanceCylinders } from "./instancing";
 import { createArenaLights } from "./lighting";
-import { isLoDevice, laveCrackTex, loadSpaceSky, loadTex, skySphereGeo } from "./textures";
+import { isLoDevice, laveCrackTex, loadArenaSurface, loadSpaceSky, loadTex, skySphereGeo } from "./textures";
 import type { AABB, HazardZone, ItemPad, JumpPad, Spawn } from "./types";
 
 const WIDTH = 96;
@@ -46,6 +46,36 @@ function addBox(
   if (collide) solids.push(boxAt(x, y, z, w, h, d));
 }
 
+function makeFissureGeometry(length: number, width: number, seed: number, segments = 14) {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const x = -length * 0.5 + length * t;
+    const bend = Math.sin(seed * 1.73 + i * 1.31) * width * 0.14
+      + Math.sin(seed * 0.47 + i * 2.83) * width * 0.055;
+    const jagged = 0.72 + (0.5 + 0.5 * Math.sin(seed * 2.11 + i * 4.17)) * 0.28;
+    const half = width * 0.5 * jagged;
+    positions.push(x, 0, bend - half, x, 0, bend + half);
+    normals.push(0, 1, 0, 0, 1, 0);
+    uvs.push(t * Math.max(1, length / 3.5), 0, t * Math.max(1, length / 3.5), 1);
+    if (i < segments) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 3, a, a + 3, a + 2);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
 export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): ArenaData {
   const group = new THREE.Group();
   const solids: AABB[] = [];
@@ -58,7 +88,7 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
   const geos: THREE.BufferGeometry[] = [];
   const batch = new BoxBatch();
 
-  const floorTex = loadTex("/textures/surfaces/lava-floor.webp", 1, 1);
+  const floorTex = loadArenaSurface("lave");
   const earthMat = new THREE.MeshLambertMaterial({
     map: floorTex,
     color: 0xffffff,
@@ -100,7 +130,14 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
     metalness: 0.08,
     toneMapped: false,
   });
-  mats.push(earthMat, rockMat, padMat, lavaMat);
+  const fissureRimMat = new THREE.MeshStandardMaterial({
+    color: 0x260403,
+    emissive: 0x7a1205,
+    emissiveIntensity: 0.72,
+    roughness: 0.9,
+    metalness: 0.02,
+  });
+  mats.push(earthMat, rockMat, padMat, lavaMat, fissureRimMat);
 
   const pulse = (color: number) => {
     const mat = new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.2 });
@@ -233,14 +270,10 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
     { x: 26, z: -6, along: "z", len: 12.5, wid: 2.05 },
     { x: -28, z: 14, along: "x", len: 12, wid: 2.05 },
   ];
-  const crackGeo = new THREE.PlaneGeometry(1, 1);
-  crackGeo.rotateX(-Math.PI / 2);
-  geos.push(crackGeo);
-  for (const crack of cracks) {
+  for (let crackIndex = 0; crackIndex < cracks.length; crackIndex++) {
+    const crack = cracks[crackIndex]!;
     const y = floorY(crack.z);
     const alongX = crack.along === "x";
-    const visW = alongX ? crack.len : crack.wid;
-    const visD = alongX ? crack.wid : crack.len;
     hazards.push({
       x: crack.x,
       y,
@@ -251,10 +284,22 @@ export function buildLave(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): A
       damage: 16,
       color: 0xff5a14,
     });
-    const core = new THREE.Mesh(crackGeo, lavaMat);
-    core.position.set(crack.x, y + 0.03, crack.z);
-    core.scale.set(visW * 0.92, 1, visD * 0.72);
-    group.add(core);
+    const rimGeo = makeFissureGeometry(crack.len, crack.wid * 1.16, crackIndex + 2.3);
+    const coreGeo = makeFissureGeometry(crack.len * 0.97, crack.wid * 0.68, crackIndex + 7.1);
+    geos.push(rimGeo, coreGeo);
+    const rim = new THREE.Mesh(rimGeo, fissureRimMat);
+    const core = new THREE.Mesh(coreGeo, lavaMat);
+    rim.name = `lave-fissure-rim-${crackIndex}`;
+    core.name = `lave-fissure-core-${crackIndex}`;
+    rim.position.set(crack.x, y + 0.018, crack.z);
+    core.position.set(crack.x, y + 0.036, crack.z);
+    if (!alongX) {
+      rim.rotation.y = Math.PI / 2;
+      core.rotation.y = Math.PI / 2;
+    }
+    rim.renderOrder = 1;
+    core.renderOrder = 2;
+    group.add(rim, core);
     if (!isLoDevice()) {
       const glow = new THREE.PointLight(0xff6418, 2.2, 11, 1.55);
       glow.castShadow = false;

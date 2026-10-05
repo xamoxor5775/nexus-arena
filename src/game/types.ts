@@ -59,6 +59,7 @@ export type HazardZone = {
   hz?: number;
   damage: number;
   color: number;
+  label?: string;
   /** Trituradora: una sola caída mata y dispara hacia arriba. */
   crush?: boolean;
 };
@@ -118,6 +119,8 @@ export type Settings = {
   skin: SkinId;
   touchHand: TouchHand;
   touchOrder: TouchActionId[];
+  /** Graphics preset. Auto holds ~60 FPS by scaling resolution and shadows. */
+  quality: import("./graphics").QualityId;
 };
 
 export type HudSnapshot = {

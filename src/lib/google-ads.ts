@@ -40,9 +40,11 @@ export function bootGoogleAds(): Promise<AdsConfig | null> {
         amount: Number(body.amount) > 0 ? Number(body.amount) : 1000,
       };
       window.dataLayer = window.dataLayer || [];
-      window.gtag = function gtag(...args: unknown[]) {
-        window.dataLayer?.push(args);
-      };
+      // gtag.js only processes the real `arguments` object; pushing a plain array is ignored.
+      window.gtag = function gtag() {
+        // eslint-disable-next-line prefer-rest-params
+        window.dataLayer?.push(arguments);
+      } as Gtag;
       window.gtag("js", new Date());
       window.gtag("config", config.id);
       if (!document.querySelector(`script[src*="googletagmanager.com/gtag/js?id=${config.id}"]`)) {
@@ -72,7 +74,10 @@ function conversion(label: string, params: Record<string, unknown>) {
   });
 }
 
-export function trackBeginCheckout(then: () => void) {
+/** Optional item for the checkout/purchase events (default: the legacy 30-day access). */
+export type AdsItem = { value: number; id: string; name: string };
+
+export function trackBeginCheckout(then: () => void, item?: AdsItem) {
   let sent = false;
   const go = () => {
     if (sent) return;
@@ -85,17 +90,18 @@ export function trackBeginCheckout(then: () => void) {
       go();
       return;
     }
+    const value = item?.value ?? cfg.amount;
     fire("begin_checkout", {
-      value: cfg.amount,
+      value,
       currency: "CLP",
-      items: [{ item_id: "nexus-access-30d", item_name: "Acceso Nexus Arena 30 días" }],
+      items: [item ? { item_id: item.id, item_name: item.name, price: item.value } : { item_id: "nexus-access-30d", item_name: "Acceso Nexus Arena 30 días" }],
       event_callback: go,
     });
-    if (cfg.checkout) conversion(cfg.checkout, { value: cfg.amount, currency: "CLP" });
+    if (cfg.checkout) conversion(cfg.checkout, { value, currency: "CLP" });
   });
 }
 
-export function trackPurchase(orderId: string) {
+export function trackPurchase(orderId: string, item?: AdsItem) {
   const id = orderId.trim();
   if (!id) return;
   const key = `nexus-ads-purchase:${id}`;
@@ -107,15 +113,15 @@ export function trackPurchase(orderId: string) {
   }
   void bootGoogleAds().then((cfg) => {
     if (!cfg?.purchase) return;
-    const params = { value: cfg.amount, currency: "CLP", transaction_id: id };
-    fire("purchase", params);
+    const params = { value: item?.value ?? cfg.amount, currency: "CLP", transaction_id: id };
+    fire("purchase", item ? { ...params, items: [{ item_id: item.id, item_name: item.name, price: item.value }] } : params);
     conversion(cfg.purchase, params);
   });
 }
 
-export function trackEnterArena() {
+export function trackEnterArena(method = "access_key") {
   void bootGoogleAds().then((cfg) => {
     if (!cfg) return;
-    fire("login", { method: "access_key" });
+    fire("login", { method });
   });
 }

@@ -26,6 +26,7 @@ const SFX_IDS = [
   "defeat",
 ] as const;
 type SfxId = (typeof SFX_IDS)[number];
+const SFX_REVISION = "20261002-user-weapons-1";
 
 /** Ganancia lineal por sample (los archivos vienen a -16 LUFS); calibrada contra el mix synth anterior. */
 const SFX_GAIN: Record<SfxId, number> = {
@@ -134,7 +135,7 @@ export class ArenaAudio {
       const exts = this.preferMp3 ? ["mp3"] : ["ogg", "mp3"];
       for (const ext of exts) {
         try {
-          const res = await fetch(`/sfx/${id}.${ext}`);
+          const res = await fetch(`/sfx/${id}.${ext}?v=${SFX_REVISION}`);
           if (!res.ok) continue;
           const buf = await this.decode(await res.arrayBuffer());
           this.samples.set(id, buf);

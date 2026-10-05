@@ -3,8 +3,8 @@ import { ROUND_SECONDS } from "./constants";
 import { boxAt } from "./collision";
 import type { AABB, ItemPad, JumpPad, Spawn, TeleportGate } from "./types";
 import { createArenaLights } from "./lighting";
-import { BoxBatch, instanceCones, instanceCylinders, instanceIcosahedrons, stampDecks } from "./instancing";
-import { isLoDevice, loadSkyTex, loadSummitTex, loadTex, portalTex, skySphereGeo } from "./textures";
+import { BoxBatch, instanceCones, instanceCylinders, stampDecks } from "./instancing";
+import { isLoDevice, loadArenaSurface, loadSkyTex, loadSummitTex, loadTex, portalTex, skySphereGeo } from "./textures";
 import { stampJumpPads, type ArenaData } from "./arena";
 
 function addBox(
@@ -112,7 +112,7 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
     return m;
   };
   const grassMat = new THREE.MeshLambertMaterial({
-    map: loadTex("/textures/summit/piso-cumbre.webp", 1, 1),
+    map: loadArenaSurface("cumbre"),
     color: 0xffffff,
     emissive: 0x1e3a12,
     emissiveIntensity: 0.12,
@@ -303,11 +303,11 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   geos.push(buttonMesh.geo);
   stampJumpPads(group, mats, geos, buttonSpots.map((p) => ({ ...p, y: p.y + 0.08 })), 0.78);
 
-  const gateRingGeo = new THREE.TorusGeometry(0.72, 0.09, 8, 16);
-  const gateArchGeo = new THREE.TorusGeometry(0.94, 0.055, 8, 18);
-  const gateBaseGeo = new THREE.CylinderGeometry(0.92, 1.08, 0.16, 12);
-  const gateCoreGeo = new THREE.CircleGeometry(0.66, 18);
-  const gatePillarGeo = new THREE.CylinderGeometry(0.07, 0.11, 0.76, 6);
+  const gateRingGeo = new THREE.TorusGeometry(0.92, 0.1, 10, 28);
+  const gateArchGeo = new THREE.TorusGeometry(0.73, 0.025, 6, 24);
+  const gateBaseGeo = new THREE.CylinderGeometry(0.94, 1.12, 0.18, 16);
+  const gateCoreGeo = new THREE.CircleGeometry(0.7, 28);
+  const gatePillarGeo = new THREE.CylinderGeometry(0.08, 0.13, 0.92, 8);
   geos.push(gateRingGeo, gateArchGeo, gateBaseGeo, gateCoreGeo, gatePillarGeo);
   const gateRings: THREE.Mesh[] = [];
   const gateCores: THREE.Mesh[] = [];
@@ -320,24 +320,24 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
       target: { x: targetX, y: targetY + 0.04, z: targetZ },
     });
     const base = new THREE.Mesh(gateBaseGeo, gateBaseMat);
-    base.position.set(x, top + 0.08, z);
+    base.position.set(x, top + 0.09, z);
     const ring = new THREE.Mesh(gateRingGeo, gateMat);
-    ring.position.set(x, top + 0.86, z);
-    ring.rotation.x = Math.PI / 2;
+    ring.position.set(x, top + 1.04, z);
     const archA = new THREE.Mesh(gateArchGeo, gateMat);
-    archA.position.set(x, top + 0.94, z);
+    archA.position.set(x, top + 1.04, z + 0.015);
+    archA.rotation.y = 0.42;
     const archB = new THREE.Mesh(gateArchGeo, gateMat);
-    archB.position.set(x, top + 0.94, z);
-    archB.rotation.y = Math.PI / 2;
+    archB.position.set(x, top + 1.04, z - 0.015);
+    archB.rotation.y = -0.42;
     const core = new THREE.Mesh(gateCoreGeo, gateCoreMat);
-    core.position.set(x, top + 0.94, z);
-    for (const [dx, dz] of [[-0.76, -0.76], [0.76, -0.76], [0.76, 0.76], [-0.76, 0.76]] as const) {
+    core.position.set(x, top + 1.04, z - 0.035);
+    for (const dx of [-0.76, 0.76]) {
       const pylon = new THREE.Mesh(gatePillarGeo, gatePillarMat);
-      pylon.position.set(x + dx, top + 0.42, z + dz);
+      pylon.position.set(x + dx, top + 0.46, z);
       group.add(pylon);
     }
     group.add(base, ring, archA, archB, core);
-    gateRings.push(ring, archA, archB);
+    gateRings.push(archA, archB);
     gateCores.push(core);
   };
   // Enlaces dobles: la salida cae siempre fuera de otra puerta, evitando teletransportes en bucle.
@@ -360,12 +360,12 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   const plant = (x: number, z: number, walk: number) => {
     const h = 1.85;
     trunks.push({ x, y: walk + h / 2, z });
-    lowerCrowns.push({ x, y: walk + h + 0.82, z });
-    middleCrowns.push({ x, y: walk + h + 1.55, z });
-    upperCrowns.push({ x, y: walk + h + 2.18, z });
+    lowerCrowns.push({ x, y: walk + h + 0.58, z });
+    middleCrowns.push({ x, y: walk + h + 1.34, z });
+    upperCrowns.push({ x, y: walk + h + 2.02, z });
     crownTips.push({ x, y: walk + h + 2.78, z });
-    for (const [dx, dz] of [[0.65, 0.18], [-0.58, 0.38], [0.16, -0.68]] as const) {
-      crownBranches.push({ x: x + dx, y: walk + h + 1.8, z: z + dz });
+    for (const [dx, dz] of [[0.72, 0.18], [-0.62, 0.42], [0.18, -0.74]] as const) {
+      crownBranches.push({ x: x + dx, y: walk + h + 1.42, z: z + dz });
     }
     treeCores.push({ x, y: walk + h + 0.82, z });
     treeLights.push({ x, y: walk + h + 1.1, z });
@@ -375,17 +375,17 @@ export function buildSummit(scene: THREE.Scene, renderer?: THREE.WebGLRenderer):
   plant(4.8, -3.2, 0);
   plant(-2.4, -6.6, 0);
   const trunkMesh = instanceCylinders(group, trunkMat, trunks, 0.18, 0.28, 1.85, 18);
-  const lowerCrownMesh = instanceIcosahedrons(group, leafMat, lowerCrowns, 1.18, 1.22);
-  const middleCrownMesh = instanceIcosahedrons(group, leafMat, middleCrowns, 0.92, 1.2);
-  const upperCrownMesh = instanceIcosahedrons(group, leafMat, upperCrowns, 0.68, 1.18);
-  const tipMesh = instanceCones(group, leafTipMat, crownTips, 0.38, 1.18, 16);
-  const branchMesh = instanceCones(group, leafTipMat, crownBranches, 0.44, 1.04, 14);
+  const lowerCrownMesh = instanceCones(group, leafMat, lowerCrowns, 1.34, 1.7, 14);
+  const middleCrownMesh = instanceCones(group, leafMat, middleCrowns, 1.08, 1.58, 14);
+  const upperCrownMesh = instanceCones(group, leafTipMat, upperCrowns, 0.78, 1.42, 12);
+  const tipMesh = instanceCones(group, leafTipMat, crownTips, 0.46, 1.3, 12);
+  const branchMesh = instanceCones(group, leafTipMat, crownBranches, 0.36, 0.92, 10);
   const coreMesh = instanceCylinders(group, treeCoreMat, treeCores, 0.09, 0.16, 1.2);
-  const treeHaloGeo = new THREE.TorusGeometry(1.2, 0.025, 6, 16);
+  const treeHaloGeo = new THREE.TorusGeometry(0.68, 0.025, 6, 16);
   geos.push(trunkMesh.geo, lowerCrownMesh.geo, middleCrownMesh.geo, upperCrownMesh.geo, tipMesh.geo, branchMesh.geo, coreMesh.geo, treeHaloGeo);
   for (const tree of treeCores) {
     const halo = new THREE.Mesh(treeHaloGeo, leafTipMat);
-    halo.position.set(tree.x, tree.y + 0.22, tree.z);
+    halo.position.set(tree.x, tree.y - 0.78, tree.z);
     halo.rotation.x = Math.PI / 2;
     group.add(halo);
     treeHalos.push(halo);

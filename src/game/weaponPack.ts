@@ -1,11 +1,19 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { WeaponId } from "./types";
+import { skinPack, type SkinPackSpec } from "@/skins/skins";
 
 type V3 = [number, number, number];
 type PackSpec = {
   file: string;
+  /** Folder under /models (default "weapons"); weapon skins live in "skins". */
+  dir?: string;
+  /** Weapon skins: raw -> view frame rotation in degrees (XYZ), instead of forward/up. */
+  euler?: V3;
+  /** Weapon skins: muzzle as [x, y] fractions of the oriented bounds, on the front face. */
+  muzzleUV?: [number, number];
   length: number;
   forward: V3;
   up: V3;
@@ -30,43 +38,70 @@ const PACK: Partial<Record<WeaponId, PackSpec>> = {
 };
 
 type Prepared = { model: THREE.Group; muzzle: THREE.Vector3 };
-const cache = new Map<WeaponId, Promise<Prepared | null>>();
+const cache = new Map<string, Promise<Prepared | null>>();
 const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
 
+/** First-person pack for a weapon: the selected weapon skin, else the default model.
+ * `skinId` previews a specific skin; "default" forces the stock model. */
+type ViewPack = { key: string; spec: PackSpec; melee: boolean };
+function viewPack(id: WeaponId, skinId?: string): ViewPack | null {
+  const skin: SkinPackSpec | null = skinPack(id, skinId);
+  if (skin) return { key: `skin:${skin.id}`, spec: { ...skin, dir: "skins" }, melee: skin.melee };
+  return PACK[id] ? { key: id, spec: PACK[id]!, melee: id === "knife" } : null;
+}
+
+/** World/third-person guns (bots) always use the stock model. */
 export function hasWeaponPack(id: WeaponId): boolean { return PACK[id] != null; }
-export function packPose(id: WeaponId, ads = false): THREE.Vector3 {
-  const spec = PACK[id]!;
+export function hasViewPack(id: WeaponId, skinId?: string): boolean { return viewPack(id, skinId) != null; }
+export function packPose(id: WeaponId, ads = false, skinId?: string): THREE.Vector3 {
+  const spec = viewPack(id, skinId)!.spec;
   return new THREE.Vector3(...(ads ? spec.ads : spec.hip));
 }
-export function packRotation(id: WeaponId): THREE.Euler {
-  return new THREE.Euler(...(PACK[id]?.rotation ?? [0.02, 0.12, -0.02] as V3));
+export function packRotation(id: WeaponId, skinId?: string): THREE.Euler {
+  return new THREE.Euler(...(viewPack(id, skinId)?.spec.rotation ?? [0.02, 0.12, -0.02] as V3));
 }
 export function setPackAim(model: THREE.Object3D, id: WeaponId, aim: number) {
-  if (!PACK[id]) return;
-  const pose = PACK[id]!.rotation ?? [0.02, 0.12, -0.02];
-  const amount = id === "knife" ? 1 : 1 - THREE.MathUtils.clamp(aim, 0, 1);
+  const pack = viewPack(id);
+  if (!pack) return;
+  const pose = pack.spec.rotation ?? [0.02, 0.12, -0.02];
+  const amount = pack.melee ? 1 : 1 - THREE.MathUtils.clamp(aim, 0, 1);
   model.rotation.set(pose[0]! * amount, pose[1]! * amount, pose[2]! * amount);
 }
 export function packViewportScale(id: WeaponId, aspect: number) {
-  return PACK[id] ? Math.min(1, Math.max(0.3, aspect / 1.2)) : 1;
+  return viewPack(id) ? Math.min(1, Math.max(0.3, aspect / 1.2)) : 1;
 }
 export function preloadWeaponPack() {
-  for (const id of Object.keys(PACK) as WeaponId[]) void loadPrepared(id);
+  const jobs: Promise<Prepared | null>[] = (Object.keys(PACK) as WeaponId[]).map((id) => loadPrepared(id, PACK[id]!));
+  // Equipped (owned) weapon skins too: they replace the stock pack in first person.
+  for (const id of SKIN_WEAPONS) { const pack = viewPack(id); if (pack && pack.key !== id) jobs.push(loadPrepared(pack.key, pack.spec)); }
+  return Promise.allSettled(jobs).then(() => undefined);
 }
+const SKIN_WEAPONS: WeaponId[] = ["pulse", "scatter", "torpedo", "lance", "ion", "fauces", "knife", "bate", "martillo"];
 
-function loadPrepared(id: WeaponId): Promise<Prepared | null> {
-  const hit = cache.get(id);
+function loadPrepared(key: string, spec: PackSpec): Promise<Prepared | null> {
+  const hit = cache.get(key);
   if (hit) return hit;
-  const spec = PACK[id]!;
-  const promise = loader.loadAsync(`/models/weapons/${spec.file}`)
+  const promise = loader.loadAsync(`/models/${spec.dir ?? "weapons"}/${spec.file}`)
     .then((gltf) => prepare(gltf.scene, spec))
     .catch((error: unknown) => {
-      console.warn(`[weapon-pack] ${id}: using procedural fallback`, error);
-      cache.delete(id); // A transient network failure must not poison later retries.
+      console.warn(`[weapon-pack] ${key}: using procedural fallback`, error);
+      cache.delete(key); // A transient network failure must not poison later retries.
       return null;
     });
-  cache.set(id, promise);
+  cache.set(key, promise);
   return promise;
+}
+
+/** Quantized (KHR_mesh_quantization) attributes become plain floats before baking. */
+function toFloat(geometry: THREE.BufferGeometry) {
+  for (const name of Object.keys(geometry.attributes)) {
+    const attr = geometry.getAttribute(name) as THREE.BufferAttribute;
+    if (attr.array instanceof Float32Array && !(attr as unknown as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute) continue;
+    const out = new THREE.BufferAttribute(new Float32Array(attr.count * attr.itemSize), attr.itemSize);
+    for (let i = 0; i < attr.count; i++) for (let c = 0; c < attr.itemSize; c++) out.setComponent(i, c, attr.getComponent(i, c));
+    geometry.setAttribute(name, out);
+  }
 }
 
 /** Freeze the authored bind pose ONCE, then batch rigid pieces by material.
@@ -86,7 +121,9 @@ function prepare(source: THREE.Object3D, spec: PackSpec): Prepared {
   }
   const right = forward.clone().cross(authoredUp).normalize();
   const up = right.clone().cross(forward).normalize();
-  const orient = new THREE.Matrix4().makeBasis(right, up, forward.clone().negate()).invert();
+  const orient = spec.euler
+    ? new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...spec.euler.map((d) => THREE.MathUtils.degToRad(d)) as V3))
+    : new THREE.Matrix4().makeBasis(right, up, forward.clone().negate()).invert();
   const batches = new Map<string, { material: THREE.Material; parts: THREE.BufferGeometry[] }>();
   const point = new THREE.Vector3();
   source.traverse((obj) => {
@@ -95,6 +132,7 @@ function prepare(source: THREE.Object3D, spec: PackSpec): Prepared {
     if (Array.isArray(mesh.material)) throw new Error(`Unsupported multi-material primitive: ${mesh.name}`);
     if (spec.onlyMaterial && mesh.material.name !== spec.onlyMaterial) return;
     const geometry = mesh.geometry.clone();
+    toFloat(geometry);
     const skinned = mesh as THREE.SkinnedMesh;
     if (skinned.isSkinnedMesh) skinned.skeleton.update();
     const pos = geometry.getAttribute("position");
@@ -153,7 +191,13 @@ function prepare(source: THREE.Object3D, spec: PackSpec): Prepared {
   const box = new THREE.Box3().setFromObject(model);
   if (box.isEmpty()) throw new Error("No usable weapon geometry");
   const scale = spec.length / Math.max(0.0001, box.max.z - box.min.z);
-  const muzzle = new THREE.Vector3(...spec.muzzle).applyMatrix4(orient).multiplyScalar(scale);
+  const muzzle = spec.muzzleUV
+    ? new THREE.Vector3(
+      THREE.MathUtils.lerp(box.min.x, box.max.x, spec.muzzleUV[0]),
+      THREE.MathUtils.lerp(box.min.y, box.max.y, spec.muzzleUV[1]),
+      box.min.z,
+    ).multiplyScalar(scale)
+    : new THREE.Vector3(...spec.muzzle).applyMatrix4(orient).multiplyScalar(scale);
   const offset = new THREE.Vector3(-muzzle.x, -muzzle.y, -spec.length * 0.82 - muzzle.z);
   model.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
@@ -189,10 +233,12 @@ export function cancelWeaponPack(root: THREE.Object3D) {
   root.traverse((obj) => { obj.userData.packToken = null; });
 }
 
-export function mountPackView(slot: THREE.Group, id: WeaponId, muzzle: THREE.Object3D, fallback?: THREE.Object3D) {
+export function mountPackView(slot: THREE.Group, id: WeaponId, muzzle: THREE.Object3D, fallback?: THREE.Object3D, skinId?: string) {
   const token = {};
   slot.userData.packToken = token;
-  void loadPrepared(id).then((prepared) => {
+  const pack = viewPack(id, skinId);
+  if (!pack) return;
+  void loadPrepared(pack.key, pack.spec).then((prepared) => {
     if (!prepared || slot.userData.packToken !== token || !slot.parent) return;
     slot.add(instantiate(prepared, true));
     // Muzzle and slot share a parent: no rotated world AABB conversions.
@@ -205,7 +251,7 @@ export function mountPackView(slot: THREE.Group, id: WeaponId, muzzle: THREE.Obj
 export function mountPackWorld(slot: THREE.Group, id: WeaponId, fallback?: THREE.Object3D) {
   const token = {};
   slot.userData.packToken = token;
-  void loadPrepared(id).then((prepared) => {
+  void loadPrepared(id, PACK[id]!).then((prepared) => {
     if (!prepared || slot.userData.packToken !== token || !slot.parent) return;
     slot.add(instantiate(prepared, false, 0.28 / PACK[id]!.length));
     if (fallback) fallback.visible = false;

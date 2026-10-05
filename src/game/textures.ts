@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { ItemKind, WeaponId } from "./types";
+import type { ArenaId, ItemKind, WeaponId } from "./types";
 
 THREE.Cache.enabled = true;
 const loader = new THREE.TextureLoader();
@@ -7,6 +7,20 @@ const texCache = new Map<string, THREE.Texture>();
 
 export function isLoDevice() {
   return typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 720 || (navigator.hardwareConcurrency || 8) <= 4);
+}
+
+/** Anisotropic filtering for mipmapped surfaces. The quality preset updates this. */
+let anisoLevel = 4;
+if (typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || window.innerWidth < 720 || (navigator.hardwareConcurrency || 8) <= 4)) {
+  anisoLevel = 1;
+}
+export function setTextureAnisotropy(level: number) {
+  const next = Math.max(1, Math.round(level));
+  if (next === anisoLevel) return;
+  anisoLevel = next;
+  for (const tex of texCache.values()) {
+    if (tex.generateMipmaps && tex.minFilter !== THREE.NearestFilter && tex.anisotropy !== next) tex.anisotropy = next;
+  }
 }
 
 let hitchEma = 16.6;
@@ -25,6 +39,20 @@ export function skySphereGeo() {
   return new THREE.SphereGeometry(240, lo ? 24 : 32, lo ? 16 : 20);
 }
 
+/**
+ * Swap a texture's image for one of a different size. three.js keys GPU storage
+ * by `texture.source`; with WebGL2 that storage is immutable (texStorage2D), so
+ * assigning a bigger image to an already-uploaded source makes three call
+ * texSubImage2D past the old bounds (GL_INVALID_VALUE "Offset overflows texture
+ * dimensions") and the GPU keeps the old pixels. Dropping the GL texture and
+ * giving the texture a fresh Source forces a correctly sized allocation.
+ */
+function replaceTexImage(tex: THREE.Texture, image: unknown) {
+  tex.dispose();
+  tex.source = new THREE.TextureSource(image);
+  tex.needsUpdate = true;
+}
+
 function downscaleTex(tex: THREE.Texture, maxEdge: number) {
   const img = tex.image as { width?: number; height?: number } | undefined;
   if (!img?.width || !img.height || typeof document === "undefined") return;
@@ -40,8 +68,7 @@ function downscaleTex(tex: THREE.Texture, maxEdge: number) {
   if (!ctx) return;
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(img as CanvasImageSource, 0, 0, w, h);
-  tex.image = c;
-  tex.needsUpdate = true;
+  replaceTexImage(tex, c);
 }
 
 function configure(tex: THREE.Texture, wrap: THREE.Wrapping, repeatX: number, repeatY: number, aniso: number) {
@@ -64,7 +91,7 @@ function makeCanvas(size: number): HTMLCanvasElement | null {
 
 function fromCanvas(c: HTMLCanvasElement, repeatX: number, repeatY: number): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(c);
-  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, isLoDevice() ? 1 : 4);
+  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, anisoLevel);
   tex.needsUpdate = true;
   return tex;
 }
@@ -328,19 +355,76 @@ export function pixelWeaponTex(kind: "steel" | "grip" | "heat", repeatX = 2, rep
   return tex;
 }
 
+let fallbackSurface: HTMLCanvasElement | null = null;
+function neutralSurface(): HTMLCanvasElement | null {
+  if (fallbackSurface) return fallbackSurface;
+  const canvas = makeCanvas(32);
+  const ctx = canvas?.getContext("2d");
+  if (!canvas || !ctx) return null;
+  ctx.fillStyle = "#929ca5";
+  ctx.fillRect(0, 0, 32, 32);
+  ctx.fillStyle = "#86919a";
+  ctx.fillRect(0, 0, 32, 1);
+  ctx.fillRect(0, 0, 1, 32);
+  fallbackSurface = canvas;
+  return canvas;
+}
+
 export function loadTex(url: string, repeatX: number, repeatY = repeatX): THREE.Texture {
   const key = `${url}:${repeatX}:${repeatY}`;
   const hit = texCache.get(key);
-  if (hit) return hit;
-  const tex = loader.load(url, (ready) => {
+  if (hit) {
+    if (hit.userData.loadState !== "error" || Date.now() - hit.userData.failedAt < 10000) return hit;
+    // Retry after a failed request when a later arena requests the surface again.
+    texCache.delete(key);
+  }
+  const tex: THREE.Texture = loader.load(url, (ready) => {
+    ready.userData.loadState = "ready";
+    // The 32px neutral placeholder may already be on the GPU: re-allocate for the real image.
+    if (ready.userData.placeholder) {
+      ready.userData.placeholder = false;
+      replaceTexImage(ready, ready.image);
+    }
     if (isLoDevice()) {
       downscaleTex(ready, 1024);
       ready.anisotropy = 1;
     }
+  }, undefined, () => {
+    tex.userData.loadState = "error";
+    tex.userData.failedAt = Date.now();
+    console.warn(`[arena-texture] ${url}: neutral fallback active`);
   });
-  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, isLoDevice() ? 1 : 4);
+  tex.userData.url = url;
+  tex.userData.loadState = "loading";
+  const fallback = neutralSurface();
+  if (fallback && tex.userData.loadState === "loading") {
+    tex.image = fallback;
+    tex.needsUpdate = true;
+    tex.userData.placeholder = true;
+  }
+  configure(tex, THREE.RepeatWrapping, repeatX, repeatY, anisoLevel);
   texCache.set(key, tex);
   return tex;
+}
+
+/** Wait for textures already requested by the active arena without blocking forever. */
+export async function waitForTextureLoads(
+  timeoutMs = 6500,
+  onProgress?: (value: number) => void,
+): Promise<void> {
+  const startedAt = performance.now();
+  while (true) {
+    const requested = [...texCache.values()].filter((tex) => Boolean(tex.userData.url));
+    const pending = requested.filter((tex) => tex.userData.loadState === "loading").length;
+    onProgress?.(requested.length ? (requested.length - pending) / requested.length : 1);
+    if (pending === 0 || performance.now() - startedAt >= timeoutMs) return;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 60));
+  }
+}
+
+/** Same UV density on desktop and mobile; only image resolution changes. */
+export function loadArenaSurface(arena: ArenaId, repeatX = 1, repeatY = repeatX): THREE.Texture {
+  return loadTex(`/textures/arenas/${arena}-surface-v3${isLoDevice() ? "-mobile" : ""}.webp`, repeatX, repeatY);
 }
 
 /** Paneles PBR por arma: body = skin propia, el resto son placas de acento del mismo set. */
@@ -476,13 +560,15 @@ export function loadPozoSurface(kind: PozoSurfaceKind, repeatX = 3, repeatY = re
 }
 
 export function loadArenaMaps() {
-  const mobile = isLoDevice();
-  const tile = mobile ? 8 : 16;
+  const mobile = isLoDevice() ? "-mobile" : "";
   return {
-    floor: loadTex("/textures/surfaces/pozo-floor.jpg", tile, tile),
-    wall: loadTex("/textures/surfaces/pozo-walls.jpg", mobile ? 6 : 12, mobile ? 2 : 3),
-    plate: loadTex("/textures/plate.jpg", 5, 5),
-    beam: loadTex("/textures/beam.jpg", 1.1, 2.4),
+    floor: loadTex(`/textures/pozo/floor-v4${mobile}.webp`, 12, 12),
+    wall: loadTex(`/textures/pozo/wall-v4${mobile}.webp`, 12, 3),
+    plate: loadTex(`/textures/pozo/tower-armor-v1${mobile}.webp`, 3, 3),
+    beam: loadTex(`/textures/pozo/tower-armor-v1${mobile}.webp`, 1, 3),
+    tower: loadTex(`/textures/pozo/tower-armor-v1${mobile}.webp`, 2, 5),
+    towerTip: loadTex(`/textures/pozo/tower-tip-v1${mobile}.webp`, 1.5, 2.5),
+    parachute: loadTex(`/textures/pozo/parachute-v1${mobile}.webp`, 1, 1),
     pipes: loadTex("/textures/pipes.jpg", 1.6, 1.4),
     hazard: loadTex("/textures/hazard.jpg", 6, 1.2),
     console: loadTex("/textures/console.jpg", 2.8, 1.2),
@@ -491,6 +577,11 @@ export function loadArenaMaps() {
     armor: loadTex("/textures/armor.jpg", 2.6, 2.6),
     skull: loadTex("/textures/skull.jpg", 1, 1),
   };
+}
+
+export function pozoParachuteTexture() {
+  const mobile = isLoDevice() ? "-mobile" : "";
+  return loadTex(`/textures/pozo/parachute-v1${mobile}.webp`, 1, 1);
 }
 
 export function loadSkyTex(url: string, cache = true): THREE.Texture {
@@ -503,7 +594,7 @@ export function loadSkyTex(url: string, cache = true): THREE.Texture {
     }
   });
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = isLoDevice() ? 1 : 4;
+  tex.anisotropy = anisoLevel;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -574,7 +665,7 @@ export function loadIconTex(url: string): THREE.Texture {
   if (hit) return hit;
   const tex = loader.load(url);
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = isLoDevice() ? 1 : 4;
+  tex.anisotropy = anisoLevel;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -643,7 +734,7 @@ export function supplyCrateTexture(kind: "armor" | "ammo" | "weapon"): THREE.Tex
   }
   fillNoise(ctx, size, 10);
   const tex = fromCanvas(c, 1, 1);
-  tex.anisotropy = isLoDevice() ? 1 : 4;
+  tex.anisotropy = anisoLevel;
   texCache.set(key, tex);
   return tex;
 }

@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   skin: "cian",
   touchHand: "right",
   touchOrder: ["jump", "weapon", "reload", "grenade", "aim"],
+  quality: "auto",
 };
 
 export const TOUCH_ACTIONS: { id: TouchActionId; label: string; short: string }[] = [
@@ -69,6 +70,13 @@ export function normalizeTouchOrder(raw: unknown): TouchActionId[] {
   }
   for (const id of DEFAULT_SETTINGS.touchOrder) if (!ids.includes(id)) ids.push(id);
   return ids;
+}
+
+/** Every playable arena id (all of them support deathmatch). */
+export const ARENA_IDS: readonly ArenaId[] = ["pozo", "cumbre", "lave", "luna", "laberinto", "mar"];
+
+export function isArenaId(id: unknown): id is ArenaId {
+  return typeof id === "string" && (ARENA_IDS as readonly string[]).includes(id);
 }
 
 export function normalizeArena(id: string | undefined): ArenaId {
@@ -150,8 +158,44 @@ export function canonicalRoomId(room: string): string {
   return room === "nexus-arena-public-v1" ? "nexus-pozo-dm" : room;
 }
 
+/** Overflow rooms per public room: `<base>-2` … `<base>-21`. */
+export const MAX_OVERFLOW_ROOMS = 20;
+export const ROOM_CAP_DEFAULT = 8;
+export const ROOM_CAP_DUEL = 2;
+
+const BASE_ROOM_RE = /^(nexus-(pozo|cumbre|lave|luna|laberinto|mar)-(dm|duel)|nexus-luna-ctf)$/;
+const OVERFLOW_ROOM_RE = /^(nexus-(?:pozo|cumbre|lave|luna|laberinto|mar)-(?:dm|duel)|nexus-luna-ctf)-([1-9]\d?)$/;
+
+/** Overflow number of a room id: 1 for the base room, 2..21 for overflow rooms, 0 if invalid. */
+export function roomOverflowIndex(room: string): number {
+  if (room === "nexus-arena-public-v1" || BASE_ROOM_RE.test(room)) return 1;
+  const m = OVERFLOW_ROOM_RE.exec(room);
+  if (!m) return 0;
+  const n = Number(m[2]);
+  return n >= 2 && n <= MAX_OVERFLOW_ROOMS + 1 ? n : 0;
+}
+
+/** Base public room of a (possibly overflow) room id, or null when invalid. */
+export function baseRoomId(room: string): string | null {
+  const index = roomOverflowIndex(room);
+  if (!index) return null;
+  if (index === 1) return canonicalRoomId(room);
+  return OVERFLOW_ROOM_RE.exec(room)![1]!;
+}
+
+/** Room id for overflow number `index` (1 = base room). */
+export function overflowRoomId(base: string, index: number): string {
+  return index <= 1 ? base : `${base}-${index}`;
+}
+
+/** Max simultaneous players: 2 in duel rooms, 8 in dm/ctf rooms. */
+export function roomCapacity(room: string): number {
+  const base = baseRoomId(room);
+  return base?.endsWith("-duel") ? ROOM_CAP_DUEL : ROOM_CAP_DEFAULT;
+}
+
 export function isPublicRoomId(room: string): boolean {
-  return room === "nexus-arena-public-v1" || /^(nexus-(pozo|cumbre|lave|luna|laberinto|mar)-(dm|duel)|nexus-luna-ctf)$/.test(room);
+  return roomOverflowIndex(room) > 0;
 }
 
 export const WEAPON_ORDER: WeaponId[] = ["pulse", "scatter", "torpedo", "lance", "ion", "fauces"];

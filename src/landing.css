@@ -1,0 +1,20 @@
+/*
+ * Landing without the demo video (static-cache PR). The hero used to be two
+ * columns on desktop (copy + video); with the video gone it is a single
+ * centered column at every width. Unlayered on purpose so it wins over the
+ * `@layer components` rules in styles.css.
+ * The now-unused .landing-video / .landing-video-art / .video-scanline rules in
+ * styles.css can be deleted in a follow-up.
+ */
+@media (min-width: 1080px) {
+  .landing-hero { grid-template-columns: 1fr; text-align: center; padding-top: 88px; padding-bottom: 88px; }
+  .landing-copy { max-width: 900px; margin: auto; text-align: center; }
+  .landing-lede { margin-inline: auto; }
+  .landing-actions { justify-content: center; }
+}
+
+/* Free 1-minute demo entry (secondary action under the $1.000 CTA). */
+.landing-demo { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 46px; margin-top: 14px; padding: 0 18px; border: 1px solid #3ae8d2; color: #3ae8d2; background: #111319cc; font: 700 11px var(--font-mono); letter-spacing: .1em; cursor: pointer; transition: transform .15s ease, background .15s ease; }
+.landing-demo svg { width: 16px; height: 16px; }
+.landing-demo:hover { transform: translateY(-2px); background: #3ae8d21f; }
+@media (max-width: 520px) { .landing-demo { width: 100%; min-height: 50px; margin-top: 10px; } }

@@ -4,7 +4,7 @@ import type { ArenaData } from "./arena";
 import { stampJumpPads, stampPortals } from "./arena";
 import { BoxBatch, instanceCylinders, stampDecks } from "./instancing";
 import { createArenaLights } from "./lighting";
-import { isLoDevice, loadSpaceSky, loadTex, mazeWaterTex, skySphereGeo } from "./textures";
+import { isLoDevice, loadArenaSurface, loadSpaceSky, loadTex, mazeWaterTex, skySphereGeo } from "./textures";
 import type { AABB, FlagPad, ItemPad, JumpPad, Spawn, TeleportGate, WaterZone } from "./types";
 
 /** 7 m de salto con JUMP_VEL 10.4 → g = v² / (2h). */
@@ -166,7 +166,7 @@ export function buildLaberinto(scene: THREE.Scene, renderer?: THREE.WebGLRendere
   const batch = new BoxBatch();
   const decks: Array<{ x: number; y: number; z: number; w: number; d: number }> = [];
 
-  const dust = loadTex("/textures/moon/piso-luna.webp", 1, 1);
+  const dust = loadArenaSurface("laberinto");
   const crater = loadTex("/textures/moon/crateres.webp", 1, 1);
   const oxide = loadTex("/textures/moon/oxido.webp", 1, 1);
   const plate = loadTex("/textures/armor.jpg", 2.6, 2.6);
@@ -192,7 +192,7 @@ export function buildLaberinto(scene: THREE.Scene, renderer?: THREE.WebGLRendere
   });
   const makeBasalt = (tiles: number) => {
     const m = new THREE.MeshLambertMaterial({
-      map: loadTex("/textures/moon/basalto.webp", tiles, Math.max(1, Math.round(tiles * 0.55))),
+      map: loadArenaSurface("laberinto", tiles, Math.max(1, Math.round(tiles * 0.55))),
       color: 0xffffff,
       emissive: 0x1a1814,
       emissiveIntensity: 0.08,
@@ -379,6 +379,38 @@ export function buildLaberinto(scene: THREE.Scene, renderer?: THREE.WebGLRendere
     if (!isLoDevice()) {
       lights.addFill(group, 12, y + 2.6, -10, 0x5ee8ff, 1.7, 12);
       lights.addFill(group, -12, y + 2.6, 10, 0xffc070, 1.4, 11);
+    }
+  }
+
+  // Narrow central bridges keep the shaft readable and open while connecting
+  // both sides of every upper maze floor. Alternate their direction so the
+  // route does not become a straight shooting corridor through all levels.
+  const BRIDGE_SPAN = CELL + 0.76;
+  const BRIDGE_WIDTH = 1.08;
+  const BRIDGE_THICK = 0.3;
+  for (let f = 1; f < FLOOR_Y.length; f++) {
+    const y = FLOOR_Y[f]!;
+    const alongX = f % 2 === 1;
+    const laneOffset = f % 3 === 0 ? -1.68 : 1.68;
+    const bridgeX = alongX ? 0 : laneOffset;
+    const bridgeZ = alongX ? laneOffset : 0;
+    const w = alongX ? BRIDGE_SPAN : BRIDGE_WIDTH;
+    const d = alongX ? BRIDGE_WIDTH : BRIDGE_SPAN;
+    addBox(batch, solids, coreMat, bridgeX, y - BRIDGE_THICK, bridgeZ, w, BRIDGE_THICK, d);
+    decks.push({ x: bridgeX, y: y + 0.025, z: bridgeZ, w, d });
+
+    // Low luminous guard rails remain visual-only to avoid snagging players.
+    const railOffset = BRIDGE_WIDTH * 0.5 - 0.08;
+    if (alongX) {
+      addBox(batch, solids, ionMat, 0, y + 0.08, bridgeZ - railOffset, BRIDGE_SPAN, 0.34, 0.11, false);
+      addBox(batch, solids, ionMat, 0, y + 0.08, bridgeZ + railOffset, BRIDGE_SPAN, 0.34, 0.11, false);
+      addBox(batch, solids, oxideMat, 0, y - 0.56, bridgeZ, BRIDGE_SPAN * 0.74, 0.26, 0.22, false);
+      waypoints.push({ x: -CELL * 0.62, y, z: bridgeZ }, { x: 0, y, z: bridgeZ }, { x: CELL * 0.62, y, z: bridgeZ });
+    } else {
+      addBox(batch, solids, ionMat, bridgeX - railOffset, y + 0.08, 0, 0.11, 0.34, BRIDGE_SPAN, false);
+      addBox(batch, solids, ionMat, bridgeX + railOffset, y + 0.08, 0, 0.11, 0.34, BRIDGE_SPAN, false);
+      addBox(batch, solids, oxideMat, bridgeX, y - 0.56, 0, 0.22, 0.26, BRIDGE_SPAN * 0.74, false);
+      waypoints.push({ x: bridgeX, y, z: -CELL * 0.62 }, { x: bridgeX, y, z: 0 }, { x: bridgeX, y, z: CELL * 0.62 });
     }
   }
 

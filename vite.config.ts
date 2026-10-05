@@ -11,6 +11,7 @@ import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
+import { STATIC_ROUTE_RULES } from "./server/cache-policy";
 
 /** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
 function hasGlobbedMigrations(root: string): boolean {
@@ -175,6 +176,11 @@ export default defineConfig(({ command, isPreview }) => ({
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
             serverDir: "./server",
+            // Cache policy for files served from public/ (see
+            // server/cache-policy.ts). Applied as route-rule headers, which
+            // Nitro sets before its static handler answers, so they reach
+            // responses that never hit server/middleware.
+            routeRules: STATIC_ROUTE_RULES,
           }),
         ]
       : []),

@@ -1,20 +1,31 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Crosshair, Pause, Play, Settings as SettingsIcon, Skull, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import type { NexusArena, RemoteSnapshot } from "@/game/engine";
-import { CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, levelFromXp, publicRoomId } from "@/game/constants";
+import { BEST_KEY, CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, isArenaId, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
+import { QUALITY_ORDER, qualityPreset, type QualityId } from "@/game/graphics";
+import { PvpInbox, makeHitMessage, makeKillMessage } from "@/game/pvp";
 import type { ArenaId, RoundPrize, SkinId, TouchActionId } from "@/game/types";
 import { P2PRoom } from "@/lib/multiplayer";
 import { useArena } from "@/game/store";
 import { arenaRadio } from "@/game/radio";
 import { debugSpool } from "@/lib/debug-spool";
+import { hudWeaponIcon } from "@/skins/skins";
+import { SkinsChrome } from "@/skins/chrome";
 
-export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSeconds?: number; autoStart?: boolean; onDemoEnd?: () => void } = {}) {
+/**
+ * `demo` = free offline play vs bots (formerly the 1-minute demo): no signaling/P2P
+ * at all, every arena available, no time limit. `onExit` goes back to the landing.
+ * Without `demo` the app joins the online room (free guest session or paid key).
+ */
+export function NexusApp({ demo }: { demo?: { onExit: () => void } } = {}) {
+  const demoMode = Boolean(demo);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<NexusArena | null>(null);
   const roomRef = useRef<P2PRoom | null>(null);
   const knownPeersRef = useRef(new Set<string>());
   const roomHostRef = useRef<string | null>(null);
   const arenaCycleEpochRef = useRef<number | null>(null);
+  const pvpSeqRef = useRef(0);
   const playArmed = useRef(false);
   const selfIdRef = useRef("");
   if (!selfIdRef.current) {
@@ -27,10 +38,19 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const hud = useArena((s) => s.hud);
   const isTouch = useArena((s) => s.isTouch);
   const showBoard = useArena((s) => s.showBoard);
-  const [demoRemaining, setDemoRemaining] = useState(demoSeconds ?? null);
   const [networkState, setNetworkState] = useState("CONECTANDO");
   const [networkPlayers, setNetworkPlayers] = useState(1);
+  const [roomNumber, setRoomNumber] = useState(1);
+  // Dev room testers play the server-forced arena (see dev-lock.ts); the lock is sticky.
+  const devLocked = useArena((s) => s.devLock !== null);
+  // The demo reuses the arena lock (pozo · dm) but is not the dev room.
+  const devRoom = devLocked && !demoMode;
+  // Signaling room key: follows the arena/mode pick, but NOT the dev-room forced
+  // arena (the server already put us in the dev room, so no reconnect needed).
+  const [roomKey, setRoomKey] = useState(() => publicRoomId(settings.arena, settings.mode));
   const [radioTick, setRadioTick] = useState(0);
+  const [loadingArena, setLoadingArena] = useState<string | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const worldRev = 84;
 
   useEffect(() => {
@@ -50,8 +70,17 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
 
   useEffect(() => {
     const off = arenaRadio.subscribe(() => setRadioTick((n) => n + 1));
-    void arenaRadio.boot().then(() => arenaRadio.play());
+    let started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      void arenaRadio.boot().then(() => arenaRadio.play());
+    };
+    window.addEventListener("nexus-entry-warm", start);
+    const backup = window.setTimeout(start, 4500);
     return () => {
+      window.removeEventListener("nexus-entry-warm", start);
+      window.clearTimeout(backup);
       off();
       arenaRadio.pause();
     };
@@ -64,6 +93,23 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const arenaId = useArena.getState().settings.arena;
+    if (arenaId === "pozo") {
+      for (const href of [
+        "/textures/space/pozo-cycle-start-v1.webp",
+        "/textures/surfaces/pozo-floor.jpg",
+        "/textures/surfaces/pozo-walls.jpg",
+      ]) {
+        if (document.head.querySelector(`link[data-nx-entry="${href}"]`)) continue;
+        const link = document.createElement("link");
+        link.rel = "preload";
+        link.as = "image";
+        link.href = href;
+        link.setAttribute("fetchpriority", "high");
+        link.dataset.nxEntry = href;
+        document.head.appendChild(link);
+      }
+    }
     let disposed = false;
     let game: NexusArena | null = null;
     (async () => {
@@ -81,12 +127,17 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
               roomRef.current?.broadcast({ type: "arena-cycle", epochMs });
             }
           },
+          onRemoteHit: (victimPeerId, hit) => {
+            roomRef.current?.send(makeHitMessage(selfIdRef.current, victimPeerId, ++pvpSeqRef.current, hit), victimPeerId);
+          },
+          onLocalDeath: (death) => {
+            roomRef.current?.send(makeKillMessage(selfIdRef.current, ++pvpSeqRef.current, death));
+          },
         });
         gameRef.current = game;
         (window as unknown as { __nexus?: NexusArena }).__nexus = game;
         game.start();
         debugSpool.info("app", "motor iniciado");
-        if (autoStart) window.setTimeout(() => game?.beginMatch(), 180);
       } catch (err) {
         debugSpool.error("app.engine", err);
       }
@@ -97,17 +148,37 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       gameRef.current = null;
       delete (window as unknown as { __nexus?: NexusArena }).__nexus;
     };
-  }, [worldRev, autoStart]);
+  }, [worldRev, demoMode]);
 
   useEffect(() => {
+    if (demoMode) {
+      // Offline play: never touch signaling (/api/rtc) or WebRTC.
+      setNetworkState("OFFLINE · VS BOTS");
+      return;
+    }
     const selfId = selfIdRef.current;
     roomHostRef.current = null;
     arenaCycleEpochRef.current = null;
+    const inbox = new PvpInbox(selfId, WEAPON_META);
+    const baseRoom = roomKey;
+    setRoomNumber(1);
     const room = new P2PRoom({
-      room: publicRoomId(settings.arena, settings.mode),
+      room: baseRoom,
       selfId,
       name: settingsRef.current.name || "Piloto",
       onConnected: () => setNetworkState("ONLINE"),
+      onRoomChanged: (next) => {
+        // Base room full: we were moved to an overflow room (<room>-2, -3, …).
+        for (const peerId of knownPeersRef.current) gameRef.current?.removeRemotePlayer(peerId);
+        knownPeersRef.current = new Set();
+        roomHostRef.current = null;
+        setRoomNumber(roomOverflowIndex(next) || 1);
+      },
+      onDevRoom: (_room, arena) => {
+        setRoomNumber(1);
+        // Everyone in the dev room plays the same map: forced arena, deathmatch.
+        useArena.getState().setDevArena(isArenaId(arena) ? arena : "pozo");
+      },
       onPeersChanged: (peers) => {
         setNetworkPlayers(peers.length + 1);
         if (!peers.length) setNetworkState("ONLINE");
@@ -126,9 +197,20 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       onRoom: (info) => {
         roomHostRef.current = info.hostId;
       },
-      onMessage: (from, data) => {
+      onMessage: (from, data, channel) => {
         if (!data || typeof data !== "object") return;
         const packet = data as { type?: string; snapshot?: RemoteSnapshot; epochMs?: number };
+        if (packet.type === "hit" || packet.type === "kill") {
+          if (channel !== "reliable") return;
+          if (packet.type === "hit") {
+            const hit = inbox.acceptHit(from, data);
+            if (hit) gameRef.current?.applyNetworkHit(from, hit);
+          } else {
+            const kill = inbox.acceptKill(from, data);
+            if (kill) gameRef.current?.applyNetworkKill(kill);
+          }
+          return;
+        }
         if (packet.type === "arena-cycle") {
           if (from !== roomHostRef.current || !Number.isFinite(packet.epochMs)) return;
           arenaCycleEpochRef.current = packet.epochMs!;
@@ -149,7 +231,7 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       const snapshot = gameRef.current?.localNetworkSnapshot();
       if (snapshot) room.broadcast({ type: "snapshot", snapshot });
       if (
-        (settings.arena === "mar" || settings.arena === "pozo" || settings.arena === "cumbre") &&
+        (settingsRef.current.arena === "mar" || settingsRef.current.arena === "pozo" || settingsRef.current.arena === "cumbre") &&
         roomHostRef.current === selfId &&
         arenaCycleEpochRef.current !== null &&
         Date.now() - lastCycleSync >= 2500
@@ -167,26 +249,16 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       setNetworkPlayers(1);
       setNetworkState("DESCONECTADO");
     };
+  }, [roomKey, demoMode]);
+
+  useEffect(() => {
+    if (useArena.getState().devLock) return;
+    setRoomKey(publicRoomId(settings.arena, settings.mode));
   }, [settings.arena, settings.mode]);
 
   useEffect(() => {
     roomRef.current?.setDisplayName(settings.name);
   }, [settings.name]);
-
-  useEffect(() => {
-    if (demoRemaining === null) return;
-    const timer = window.setInterval(() => {
-      setDemoRemaining((remaining) => {
-        if (remaining === null || remaining <= 1) {
-          window.clearInterval(timer);
-          onDemoEnd?.();
-          return 0;
-        }
-        return remaining - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [demoRemaining, onDemoEnd]);
 
   useEffect(() => {
     const g = gameRef.current;
@@ -238,29 +310,39 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
   const play = useCallback(() => {
     if (playArmed.current) return;
     playArmed.current = true;
-    window.setTimeout(() => {
-      playArmed.current = false;
-    }, 700);
+    const arenaLabel = ARENA_CARDS.find((card) => card.id === settingsRef.current.arena)?.title ?? "Arena";
+    setLoadingArena(arenaLabel);
+    setLoadingProgress(0.04);
     let tries = 0;
-    const run = () => {
+    const run = async () => {
       const g = gameRef.current;
       if (!g) {
         if (tries++ < 40) window.setTimeout(run, 50);
         else {
           playArmed.current = false;
+          setLoadingArena(null);
           debugSpool.error("app.play", "el motor no arrancó");
         }
         return;
       }
       debugSpool.info("app.play", "iniciar ronda");
       try {
+        const startedAt = performance.now();
+        await g.prepareArena(setLoadingProgress);
+        const remaining = Math.max(0, 900 - (performance.now() - startedAt));
+        if (remaining) await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
         g.beginMatch();
       } catch (err) {
-        playArmed.current = false;
         debugSpool.error("app.play", err);
+      } finally {
+        setLoadingProgress(1);
+        window.setTimeout(() => {
+          setLoadingArena(null);
+          playArmed.current = false;
+        }, 180);
       }
     };
-    run();
+    void run();
   }, []);
 
   return (
@@ -269,19 +351,25 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       data-hand={settings.touchHand}
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
+      {loadingArena && <ArenaLoadingScreen arena={loadingArena} progress={loadingProgress} />}
       {(screen === "playing" || screen === "paused" || screen === "ended") && (
         <div className="nx-net-badge pointer-events-none absolute right-3 top-3 z-20 rounded-sm border border-health/60 bg-bg/80 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-health shadow-[0_0_18px_rgba(126,220,106,0.18)] sm:right-5 sm:top-5">
           <span className="mr-2 inline-block size-2 rounded-full bg-health shadow-[0_0_8px_#7edc6a]" />
           {networkState} · {networkPlayers} {networkPlayers === 1 ? "JUGADOR" : "JUGADORES"}
+          {devRoom ? <span className="whitespace-nowrap opacity-60"> · SALA 1 · DEV</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · SALA {roomNumber}</span>}
         </div>
       )}
-      {demoRemaining !== null && <div className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-sm border border-ion/70 bg-bg/85 px-4 py-2 text-center"><p className="nx-kicker text-ion">DEMO DE NEXUS ARENA</p><p className="nx-num text-3xl text-fg">00:{String(Math.max(0, demoRemaining)).padStart(2, "0")}</p></div>}
-
       {(screen === "menu" || screen === "settings" || screen === "help" || screen === "skin") && (
-        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} radioTick={radioTick} />
+        <MenuLayer onPlay={play} networkState={networkState} networkPlayers={networkPlayers} roomNumber={roomNumber} devRoom={devRoom} arenaLocked={devLocked} radioTick={radioTick} offline={demoMode} />
+      )}
+      <SkinsChrome />
+      {demo && screen === "menu" && (
+        <button type="button" className="nxd-back-online" onClick={demo.onExit} data-testid="offline-exit">
+          ← Jugar online gratis
+        </button>
       )}
 
-      {screen === "playing" && <HudLayer />}
+      {screen === "playing" && <HudLayer radioTick={radioTick} />}
       {screen === "paused" && <PauseLayer />}
       {screen === "ended" && <EndLayer onPlay={play} />}
 
@@ -299,10 +387,25 @@ export function NexusApp({ demoSeconds, autoStart = false, onDemoEnd }: { demoSe
       {(screen === "playing" || screen === "paused" || screen === "ended") && (
         <Scoreboard emphasized={showBoard || screen === "ended"} />
       )}
-      {screen !== "menu" && screen !== "settings" && screen !== "help" && screen !== "skin" && !(isTouch && screen === "playing") && (
+      {(screen === "paused" || screen === "ended") && (
         <RadioDock tick={radioTick} />
       )}
     </main>
+  );
+}
+
+function ArenaLoadingScreen({ arena, progress }: { arena: string; progress: number }) {
+  const value = Math.max(0, Math.min(100, Math.round(progress * 100)));
+  return (
+    <div className="nx-arena-loading" role="status" aria-live="polite" aria-label={`Cargando ${arena}`}>
+      <img src="/media/nexus-arena-espera.webp" alt="Piloto de Nexus Arena esperando el despliegue" />
+      <div className="nx-arena-loading-shade" />
+      <div className="nx-arena-loading-status">
+        <p>PREPARANDO {arena.toUpperCase()}</p>
+        <div className="nx-arena-loading-track"><i style={{ width: `${value}%` }} /></div>
+        <span>{value < 96 ? "CARGANDO TEXTURAS Y MODELOS" : "ESTABILIZANDO ARENA"} · {value}%</span>
+      </div>
+    </div>
   );
 }
 
@@ -310,12 +413,22 @@ function MenuLayer({
   onPlay,
   networkState,
   networkPlayers,
+  roomNumber = 1,
+  devRoom = false,
+  arenaLocked = devRoom,
   radioTick,
+  offline = false,
 }: {
   onPlay: () => void;
   networkState: string;
   networkPlayers: number;
+  roomNumber?: number;
+  devRoom?: boolean;
+  /** Arena/mode picks disabled (dev room). */
+  arenaLocked?: boolean;
   radioTick: number;
+  /** Offline vs bots (no online room). */
+  offline?: boolean;
 }) {
   void radioTick;
   const screen = useArena((s) => s.screen);
@@ -332,6 +445,8 @@ function MenuLayer({
   const ctf = settings.mode === "ctf";
   const dm = settings.mode !== "ctf";
   const arenaName = mar ? "Mar y cielo" : maze ? "Laberinto" : luna ? "Luna" : cumbre ? "Cumbre" : lave ? "LAVE" : "Pozo";
+  const career = readCareer();
+  const selectedUnlock = arenaUnlockStatus(settings.arena, career);
   const pickArena = (arena: ArenaId) => {
     patch(settings.mode === "ctf" && arena !== "luna" ? { arena, mode: "dm" } : { arena });
   };
@@ -367,13 +482,16 @@ function MenuLayer({
                       : lave
                         ? "Pendiente de tres carriles. La mega está arriba, la armadura abajo, el lance en el nido."
                         : "El anillo ve a todos. La mega está en el pozo. Al sur el tubo es una trituradora: si caes al fondo te muele y te lanza al espacio."}{" "}
-              Todos los que eligen {arenaName} juegan juntos aquí.
+              {offline ? "Partida local contra bots, sin conexión." : `Todos los que eligen ${arenaName} juegan juntos aquí.`}
             </p>
           </div>
           <aside className="nx-statcard w-full sm:w-72">
             <p className="nx-statcard-live">
               <i />
-              {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+              <span className="leading-snug">
+                {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+                {devRoom ? <span className="whitespace-nowrap opacity-60"> · sala 1 · dev</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
+              </span>
             </p>
             <p className="nx-statcard-kicker">Núcleo de la arena</p>
             <p className="nx-statcard-lead">{ctf ? "El límite de capturas se cambia en Ajustes." : "El límite de frags se cambia en Ajustes."}</p>
@@ -392,7 +510,11 @@ function MenuLayer({
               </li>
               <li>
                 <span>Tu récord</span>
-                <b>{best > 0 ? `${best} frags` : "sin marca"}</b>
+                <b>{Math.max(best, career.best) > 0 ? `${Math.max(best, career.best)} frags` : "sin marca"}</b>
+              </li>
+              <li>
+                <span>Progreso</span>
+                <b>NV {career.level} · {career.wins} victorias</b>
               </li>
             </ul>
             <div className="nx-statcard-plan">
@@ -406,11 +528,14 @@ function MenuLayer({
           <div className="nx-arena-grid" role="group" aria-label="Elegir arena e ingresar">
             {ARENA_CARDS.map((card) => {
               const on = settings.arena === card.id && (card.id === "luna" || !ctf);
+              const unlock = arenaUnlockStatus(card.id, career);
               return (
                 <ArenaCard
                   key={card.id}
                   card={card}
                   on={on}
+                  locked={arenaLocked ? !on : !unlock.open}
+                  hint={arenaLocked ? "Sala dev: arena fija" : unlock.hint}
                   onClick={() => (on ? onPlay() : pickArena(card.id))}
                 />
               );
@@ -429,12 +554,13 @@ function MenuLayer({
               />
               <PickBtn
                 on={ctf}
+                locked={arenaLocked}
                 title="Captura"
                 hint="Banderas en Luna"
                 onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })}
               />
             </div>
-            <SteelBtn primary hint={`Entra a ${arenaName} · ronda ahora`} onClick={onPlay} icon={<Play className="size-4" />}>
+            <SteelBtn primary hint={selectedUnlock.open ? `Entra a ${arenaName} · ronda ahora` : `Bloqueado: ${selectedUnlock.hint}`} onClick={() => (selectedUnlock.open ? onPlay() : undefined)} icon={<Play className="size-4" />}>
               Jugar
             </SteelBtn>
             <SteelBtn tone="guide" hint="Controles, armas y pads" onClick={() => setScreen("help")} icon={<BookOpen className="size-4" />}>
@@ -466,7 +592,7 @@ function MenuLayer({
             </div>
           )}
 
-          {screen === "menu" && <MenuCareer bots={settings.bots} />}
+          {screen === "menu" && <MenuCareer bots={settings.bots} career={career} />}
         </footer>
 
         {(screen === "settings" || screen === "help" || screen === "skin") && (
@@ -501,7 +627,7 @@ function RadioDock({ tick }: { tick: number }) {
   void tick;
   const snap = arenaRadio.snapshot();
   return (
-    <div className="pointer-events-auto absolute bottom-36 left-3 z-30 flex max-w-[min(92vw,22rem)] items-center gap-1 rounded-sm border border-ion/40 bg-bg/85 px-2 py-1.5 sm:bottom-32 sm:left-auto sm:right-4 sm:top-auto">
+    <div className="nx-radio-dock pointer-events-auto" aria-label="Radio de la arena">
       <button type="button" className="nx-kicker min-h-11 min-w-11 text-ion" onClick={() => arenaRadio.prev()} aria-label="Tema anterior">
         <SkipBack className="mx-auto size-4" />
       </button>
@@ -571,37 +697,65 @@ const ARENA_CARDS: Array<{ id: ArenaId; title: string; line: string; art: string
   { id: "mar", title: "Mar y cielo", line: "Plataforma sobre el océano", art: "/textures/previews/arena-mar-preview-v1.webp", rail: "#9fd4ff" },
 ];
 
+const ARENA_UNLOCKS: Record<ArenaId, { level: number; wins: number; record: number }> = {
+  pozo: { level: 1, wins: 0, record: 0 },
+  cumbre: { level: 2, wins: 10, record: 10 },
+  lave: { level: 4, wins: 20, record: 20 },
+  luna: { level: 6, wins: 30, record: 30 },
+  laberinto: { level: 8, wins: 40, record: 40 },
+  mar: { level: 10, wins: 50, record: 50 },
+};
+
+function arenaUnlockStatus(id: ArenaId, career: CareerSnapshot) {
+  const req = ARENA_UNLOCKS[id];
+  const open = career.level >= req.level || career.wins >= req.wins || career.best >= req.record;
+  const hint =
+    id === "pozo"
+      ? "Disponible"
+      : `Nivel ${req.level} · ${req.wins} victorias · récord ${req.record}`;
+  return { open, hint };
+}
+
 function ArenaCard({
   card,
   on,
+  locked = false,
+  hint,
   onClick,
 }: {
   card: (typeof ARENA_CARDS)[number];
   on: boolean;
+  /** Dev/progression lock: arena fixed or not unlocked yet. */
+  locked?: boolean;
+  hint?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
-      aria-label={on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
+      disabled={locked}
+      title={locked ? hint : undefined}
+      aria-label={locked ? `${card.title} bloqueada. ${hint}` : on ? `Entrar a ${card.title}` : `Elegir ${card.title}`}
       style={{ ["--arena-rail" as string]: card.rail, backgroundImage: `url(${card.art})` }}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-arena-card ${on ? "is-on" : ""}`}
+      className={`nx-arena-card ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
-      <span className="nx-arena-card-kicker">{on ? "Lista" : "Arena"}</span>
+      <span className="nx-arena-card-kicker">{on ? "Lista" : locked ? "Bloqueada" : "Arena"}</span>
       <span className="nx-arena-card-title">{card.title}</span>
       <span className="nx-arena-card-line">{card.line}</span>
-      <span className="nx-arena-card-go">{on ? "Entrar" : "Elegir"}</span>
+      <span className="nx-arena-card-go">{locked ? hint : on ? "Entrar" : "Elegir"}</span>
     </button>
   );
 }
@@ -610,28 +764,35 @@ function PickBtn({
   title,
   hint,
   on,
+  locked = false,
   onClick,
 }: {
   title: string;
   hint?: string;
   on: boolean;
+  /** Dev room: mode fixed to deathmatch. */
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       aria-pressed={on}
+      disabled={locked}
+      title={locked ? "Sala dev: deathmatch fijo" : undefined}
       onPointerUp={(e) => {
+        if (locked) return;
         if (e.pointerType === "touch") {
           e.preventDefault();
           onClick();
         }
       }}
       onClick={(e) => {
+        if (locked) return;
         if (e.nativeEvent instanceof PointerEvent && e.nativeEvent.pointerType === "touch") return;
         onClick();
       }}
-      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""}`}
+      className={`nx-pick ${hint ? "nx-pick-mode" : ""} ${on ? "is-on" : ""} ${locked ? "is-locked" : ""}`}
     >
       <span className="nx-pick-title">{title}</span>
       {hint ? <span className="nx-pick-hint">{hint}</span> : null}
@@ -683,8 +844,41 @@ function SteelBtn({
   );
 }
 
+function QualityPicker({ quality, onPick }: { quality: QualityId; onPick: (q: QualityId) => void }) {
+  const [state, setState] = useState<{ scale: number; shadows: boolean; fps: number; msaa: boolean } | null>(null);
+  useEffect(() => {
+    const read = () => {
+      const view = (window as unknown as { __nexus?: { view?: { qualityState?: () => { scale: number; shadows: boolean; fps: number; msaa: boolean } } } }).__nexus?.view;
+      setState(view?.qualityState ? view.qualityState() : null);
+    };
+    read();
+    const t = window.setInterval(read, 1000);
+    return () => window.clearInterval(t);
+  }, [quality]);
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const current = qualityPreset(quality, dpr);
+  return (
+    <section className="nx-quality mt-4" aria-label="Calidad gráfica">
+      <p className="nx-kicker text-ion">Calidad gráfica</p>
+      <div className="nx-quality-row mt-2" role="group" aria-label="Preset de calidad">
+        {QUALITY_ORDER.map((id) => {
+          const p = qualityPreset(id, dpr);
+          return <PickBtn key={id} on={quality === id} title={p.label} hint={p.hint} onClick={() => onPick(id)} />;
+        })}
+      </div>
+      <p className="nx-copy nx-body mt-2 text-sm" data-testid="quality-readout">
+        {state
+          ? `Resolución ${Math.round(state.scale * 100)}% · sombras ${state.shadows ? "sí" : "no"}${state.msaa ? " · AA" : ""}${current.adaptive && state.fps ? ` · ${state.fps} FPS` : ""}`
+          : current.hint}
+        {current.msaa && !state?.msaa ? " · el antialias se aplica al reiniciar la partida" : ""}
+      </p>
+    </section>
+  );
+}
+
 function SettingsPanel({ onBack }: { onBack: () => void }) {
   const settings = useArena((s) => s.settings);
+  const devLocked = useArena((s) => s.devLock !== null);
   const isTouch = useArena((s) => s.isTouch);
   const patch = useArena((s) => s.patchSettings);
   const moveTouch = (from: number, dir: -1 | 1) => {
@@ -721,11 +915,12 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
       </label>
       <div className="nx-pick-row nx-pick-modes mt-4" role="group" aria-label="Modo de partida">
         <PickBtn on={settings.mode === "dm"} title="Deathmatch" hint="Todos vs todos" onClick={() => patch({ mode: "dm", bots: 4, fragLimit: 15 })} />
-        <PickBtn on={settings.mode === "ctf"} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
+        <PickBtn on={settings.mode === "ctf"} locked={devLocked} title="Captura" hint="Banderas en Luna" onClick={() => patch({ mode: "ctf", arena: "luna", bots: 3, capLimit: 3 })} />
       </div>
       <div className="mt-2">
-        <PickBtn on={settings.mode === "duel"} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
+        <PickBtn on={settings.mode === "duel"} locked={devLocked} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
       </div>
+      <QualityPicker quality={settings.quality} onPick={(quality) => patch({ quality })} />
       <div className="nx-modal-grid">
         <Slider label={isTouch ? "Sensibilidad de la mira" : "Sensibilidad del mouse"} value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />
         <Slider label="Campo de visión (FOV)" value={settings.fov} min={70} max={100} step={1} suffix="°" onChange={(v) => patch({ fov: v })} />
@@ -927,9 +1122,13 @@ function HelpPanel({ onBack }: { onBack: () => void }) {
   );
 }
 
-function HudLayer() {
+export function HudLayer({ radioTick = 0 }: { radioTick?: number }) {
   const hud = useArena((s) => s.hud);
   const healthTone = hud.health > 100 ? "text-ion" : hud.health <= 30 ? "text-hot" : "text-health";
+  const weapon = WEAPON_META[hud.weapon];
+  const melee = weapon.kind === "melee";
+  const ammoRatio = Math.max(0, Math.min(1, hud.ammo / weapon.mag));
+  const ammoState = melee ? "melee" : hud.ammo === 0 ? "empty" : ammoRatio <= 0.25 ? "low" : "ready";
   return (
     <div className="pointer-events-none absolute inset-0 z-10 nx-hud">
       {hud.hurt > 0 && hud.alive && (
@@ -1003,7 +1202,7 @@ function HudLayer() {
         )}
       </div>
 
-      <div className="nx-hud-feed absolute right-5 top-5 max-w-xs space-y-1 text-right sm:right-8 sm:top-8">
+      <div className="nx-hud-feed absolute right-5 top-16 max-w-xs space-y-1 text-right sm:right-8 sm:top-[4.75rem]">
         {hud.killFeed.map((k) => (
           <p key={k.id} className="nx-stat text-copy">
             <span className="font-semibold text-fg">{k.attacker}</span>
@@ -1030,16 +1229,22 @@ function HudLayer() {
       </div>
 
       <div className="nx-hud-ammo absolute bottom-6 right-5 text-right sm:bottom-10 sm:right-10">
-        <p className="nx-kicker text-copy">{WEAPON_META[hud.weapon].label}</p>
-        {WEAPON_META[hud.weapon].kind === "melee" ? (
-          <p className="nx-num text-3xl">MELÉ</p>
-        ) : (
-          <p className="nx-num text-5xl">
-            {hud.ammo}
-            <span className="ml-0.5 text-xl font-semibold tracking-normal text-copy">/{hud.reserve}</span>
-          </p>
-        )}
-        <div className="mt-2 flex justify-end gap-1.5">
+        <RadioDock tick={radioTick} />
+        <section className="nx-ammo-panel" data-ammo-state={ammoState} aria-label="Estado del arma">
+          <div className="nx-ammo-heading">
+            <span>{weapon.label}</span>
+            <span className="nx-ammo-status">{melee ? "MELÉ" : hud.ammo === 0 ? (hud.reserve > 0 ? "RECARGAR · R" : "SIN MUNICIÓN") : ammoState === "low" ? "MUNICIÓN BAJA" : "LISTO"}</span>
+          </div>
+          {melee ? <div className="nx-melee-readout">CUERPO A CUERPO<span>Sin munición</span></div> : <>
+            <div className="nx-ammo-readout">
+              <div><span className="nx-ammo-label">CARGADOR</span><p><strong className="nx-ammo-count">{hud.ammo}</strong><span className="nx-ammo-capacity">/ {weapon.mag}</span></p></div>
+              <div className="nx-ammo-reserve"><span className="nx-ammo-label">RESERVA</span><strong>{hud.reserve}</strong></div>
+            </div>
+            <div className="nx-ammo-meter" role="meter" aria-label="Balas en el cargador" aria-valuemin={0} aria-valuemax={weapon.mag} aria-valuenow={hud.ammo}>
+              <span style={{ width: `${ammoRatio * 100}%` }} />
+            </div>
+          </>}
+        <div className="nx-weapon-strip">
           {WEAPON_ORDER.map((id, i) => (
             <span
               key={id}
@@ -1052,7 +1257,7 @@ function HudLayer() {
               }`}
               title={WEAPON_META[id].label}
             >
-              <img src={`/textures/pickups/${id}-icon.jpg`} alt={WEAPON_META[id].label} />
+              <img src={hudWeaponIcon(id)} alt={WEAPON_META[id].label} />
               <b>{i + 1}</b>
             </span>
           ))}
@@ -1062,12 +1267,13 @@ function HudLayer() {
               className={`nx-wep-slot ${hud.weapon === id ? "is-hot" : "is-owned"}`}
               title={WEAPON_META[id].label}
             >
-              <img src={`/textures/pickups/${id}-icon.jpg`} alt={WEAPON_META[id].label} />
+              <img src={hudWeaponIcon(id)} alt={WEAPON_META[id].label} />
               <b>V</b>
             </span>
           ))}
         </div>
-        <p className="nx-stat mt-2 text-ion">G GRANADAS PÍXEL: {hud.grenades}</p>
+        <div className="nx-grenade-readout"><span><kbd>G</kbd> GRANADAS</span><strong>{hud.grenades}</strong></div>
+        </section>
       </div>
 
       {hud.powers.length > 0 && (
@@ -1130,28 +1336,43 @@ function PauseLayer() {
   );
 }
 
-function MenuCareer({ bots }: { bots: number }) {
-  const career = readCareer();
+function MenuCareer({ bots, career }: { bots: number; career: CareerSnapshot }) {
   return (
     <div className="nx-menu-extras nx-plate flex items-center gap-4 px-4 py-3">
       <div>
         <p className="nx-copy nx-kicker">Nivel {career.level}</p>
         <p className="nx-ink nx-num text-4xl">{career.xp}<span className="text-xl text-copy">/{XP_PER_LEVEL}</span></p>
         <p className="nx-copy nx-stat mt-1">{career.prize ? PRIZE_LABEL[career.prize] : `${1 + bots} en pista`}</p>
+        <p className="nx-copy nx-stat mt-1">{career.wins} victorias · récord {career.best}</p>
       </div>
       <Skull className="size-10 text-muted" strokeWidth={1.25} />
     </div>
   );
 }
 
-function readCareer() {
+type CareerSnapshot = {
+  level: number;
+  xp: number;
+  prize: RoundPrize | null;
+  wins: number;
+  best: number;
+};
+
+function readCareer(): CareerSnapshot {
   try {
     const raw = localStorage.getItem(CAREER_KEY);
-    const data = raw ? (JSON.parse(raw) as { xp?: number; prize?: RoundPrize | null }) : {};
+    const data = raw ? (JSON.parse(raw) as { xp?: number; prize?: RoundPrize | null; wins?: number }) : {};
     const xp = Math.max(0, data.xp ?? 0);
-    return { level: levelFromXp(xp), xp: xp % XP_PER_LEVEL, prize: data.prize ?? null };
+    const best = Number(localStorage.getItem(BEST_KEY) || "0");
+    return {
+      level: levelFromXp(xp),
+      xp: xp % XP_PER_LEVEL,
+      prize: data.prize ?? null,
+      wins: Math.max(0, data.wins ?? 0),
+      best: Number.isFinite(best) ? Math.max(0, best) : 0,
+    };
   } catch {
-    return { level: 1, xp: 0, prize: null as RoundPrize | null };
+    return { level: 1, xp: 0, prize: null, wins: 0, best: 0 };
   }
 }
 
@@ -1405,3 +1626,4 @@ function RoundBtn({
 function getGame(): NexusArena | null {
   return (window as unknown as { __nexus?: NexusArena }).__nexus ?? null;
 }
+

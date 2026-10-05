@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { boxAt } from "./collision";
 import type { AABB, FlagPad, HazardZone, ItemPad, JumpPad, Spawn, TeleportGate, WaterZone } from "./types";
 import { isPower, POWER_META, ROUND_SECONDS } from "./constants";
-import { loadArenaMaps, loadPozoSurface, loadSkyTex, loadTex, pickupTexture, jumpPadTex, portalTex, loadIconTex, isLoDevice, smokePuffTex, skySphereGeo } from "./textures";
+import { loadArenaMaps, loadArenaSurface, loadPozoSurface, loadSkyTex, loadTex, pickupTexture, jumpPadTex, portalTex, loadIconTex, isLoDevice, smokePuffTex, skySphereGeo } from "./textures";
 import { createArenaLights, type ArenaLights } from "./lighting";
 import { BoxBatch, bakeMeshes, instanceCylinders, instanceDiscs, instancePlanes, stampDecks } from "./instancing";
 import { mountPozoCar } from "./pozoCar";
@@ -93,7 +93,55 @@ export function stampPortals(
   return discs;
 }
 
-const CORE_TUBE = { x: 0, z: -42, y: -15.2, r: 4.05 };
+/** Sur del mapa: magnitud Y = altura de la torre (antes profundidad del pozo). */
+const CORE_TUBE = { x: 0, z: -42, y: 15.2, r: 4.05 };
+
+/** UV en metros de mundo para cilindros abiertos (túnel / pozo). */
+function scaleOpenCylinderUVs(geo: THREE.BufferGeometry, radius: number, height: number, tileM = 2.15) {
+  const uv = geo.getAttribute("uv") as THREE.BufferAttribute;
+  const around = (Math.PI * 2 * radius) / tileM;
+  const up = height / tileM;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * around, uv.getY(i) * up);
+  uv.needsUpdate = true;
+}
+
+/** Banda horizontal con hueco. CylinderGeometry rellena el centro y tapa el fuste. */
+function annularCylinder(rIn: number, rOut: number, height: number, segments: number) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, Math.max(rOut, rIn + 0.05), 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rIn, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: height,
+    bevelEnabled: false,
+    curveSegments: Math.max(12, segments),
+  });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, -height / 2, 0);
+  return geo;
+}
+
+function addAnnulus(
+  group: THREE.Group,
+  geos: THREE.BufferGeometry[],
+  mat: THREE.Material,
+  x: number,
+  y: number,
+  z: number,
+  rIn: number,
+  rOut: number,
+  height: number,
+  segments: number,
+) {
+  const geo = annularCylinder(rIn, rOut, height, segments);
+  geos.push(geo);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  group.add(mesh);
+}
 
 function punchRectHole(
   fill: (x: number, z: number, w: number, d: number) => void,
@@ -243,25 +291,99 @@ function buildCoreTube(
   waypoints: { x: number; y: number; z: number }[],
   hazards: HazardZone[],
 ): { update: (now: number, dt: number) => void; dispose: () => void } {
+  // Trituradora volteada 180° → torre de pizza sobre el suelo.
+  // Se mantienen rotores, hazard crush, humo, ítems, luces, cartel y banderas.
   const CX = CORE_TUBE.x;
   const CZ = CORE_TUBE.z;
-  const CORE_Y = CORE_TUBE.y;
-  const crypt = -4.6;
-  const RISE = 0.36;
-  const TURNS = 3.05;
-  const STAIR_R = 2.32;
   const TUBE_R = CORE_TUBE.r;
-  const CORE_R = 0.4;
-  const shaftH = -CORE_Y;
-  const STEPS = Math.ceil(shaftH / RISE);
-  const lite = isLoDevice();
+  const shaftH = Math.abs(CORE_TUBE.y); // 15.2
+  const HALL_Y = shaftH; // antes CORE_Y bajo tierra
+  const midY = 4.6; // antes crypt
   const PIT_R = 3.15;
-  const PIT_Y = CORE_Y - 3.55;
+  const PIT_Y = HALL_Y + 3.55; // cámara de rotores arriba
+  const lite = isLoDevice();
 
-  geos.push(instanceCylinders(group, mossMat, [{ x: CX, y: 0.06, z: CZ }], TUBE_R + 0.08, TUBE_R + 1.05, 0.16, 36).geo);
-  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: 0.22, z: CZ }], TUBE_R - 0.18, TUBE_R + 0.18, 0.14, 36).geo);
+  // --- Piso de vidrio (ventana transparente + colisión: nadie cae) ---
+  const glassMat = lite
+    ? new THREE.MeshStandardMaterial({
+        color: 0xb8fff6,
+        transparent: true,
+        opacity: 0.42,
+        roughness: 0.12,
+        metalness: 0.08,
+        emissive: 0x1a7068,
+        emissiveIntensity: 0.4,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    : new THREE.MeshPhysicalMaterial({
+        color: 0xb8fff6,
+        transparent: true,
+        opacity: 0.38,
+        roughness: 0.06,
+        metalness: 0.05,
+        transmission: 0.72,
+        thickness: 0.35,
+        ior: 1.45,
+        emissive: 0x1a7068,
+        emissiveIntensity: 0.35,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+  mats.push(glassMat);
+  const glassGeo = new THREE.CircleGeometry(TUBE_R + 0.2, lite ? 24 : 40);
+  glassGeo.rotateX(-Math.PI / 2);
+  geos.push(glassGeo);
+  const glass = new THREE.Mesh(glassGeo, glassMat);
+  glass.name = "pozo-tower-glass-floor";
+  glass.position.set(CX, 0.05, CZ);
+  glass.receiveShadow = true;
+  glass.castShadow = false;
+  group.add(glass);
+  // Colisión sólida del vidrio (caja fina que tapa el hueco).
+  solids.push(boxAt(CX, -0.02, CZ, (TUBE_R + 0.35) * 2, 0.16, (TUBE_R + 0.35) * 2));
 
-  const rimGeo = new THREE.TorusGeometry(TUBE_R + 0.06, 0.11, 12, 48);
+  // Anillo / base tipo torre de pizza (crema + rojo).
+  const creamMat = new THREE.MeshStandardMaterial({
+    color: 0xf3e2c4,
+    metalness: 0.12,
+    roughness: 0.55,
+    emissive: 0x4a3020,
+    emissiveIntensity: 0.08,
+  });
+  const tomatoMat = new THREE.MeshStandardMaterial({
+    color: 0xc43a28,
+    metalness: 0.18,
+    roughness: 0.42,
+    emissive: 0xff4a20,
+    emissiveIntensity: 0.35,
+    toneMapped: false,
+  });
+  mats.push(creamMat, tomatoMat);
+  addAnnulus(group, geos, creamMat, CX, 0.12, CZ, TUBE_R + 0.15, TUBE_R + 1.25, 0.22, 36);
+  addAnnulus(group, geos, tomatoMat, CX, 0.32, CZ, TUBE_R + 0.05, TUBE_R + 0.55, 0.16, 36);
+
+  // Borde irregular neón (sigue siendo el “rim” de la boca, ahora base de la torre).
+  const rimGeo = new THREE.TorusGeometry(TUBE_R + 0.06, 0.11, 12, 64);
+  {
+    const pos = rimGeo.getAttribute("position") as THREE.BufferAttribute;
+    const majorR = TUBE_R + 0.06;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      const ang = Math.atan2(y, x);
+      const wave = 1 + 0.09 * Math.sin(ang * 5) + 0.055 * Math.sin(ang * 11 + 0.7) + 0.03 * Math.sin(ang * 17 - 1.2);
+      const dent = 1 - 0.12 * Math.max(0, Math.sin(ang * 3 + 0.4)) ** 3;
+      const s = wave * dent;
+      const radial = Math.hypot(x, y) || 1;
+      const nx = (x / radial) * (majorR * (s - 1) + radial);
+      const ny = (y / radial) * (majorR * (s - 1) + radial);
+      pos.setXYZ(i, nx, ny, z + 0.04 * Math.sin(ang * 7) + 0.025 * Math.cos(ang * 13));
+    }
+    pos.needsUpdate = true;
+    rimGeo.computeVertexNormals();
+  }
   geos.push(rimGeo);
   const rimMat = new THREE.MeshStandardMaterial({
     color: 0x9ffff2,
@@ -273,121 +395,256 @@ function buildCoreTube(
   });
   mats.push(rimMat);
   const rim = new THREE.Mesh(rimGeo, rimMat);
-  rim.position.set(CX, 0.16, CZ);
+  rim.position.set(CX, 0.42, CZ);
   rim.rotation.x = Math.PI / 2;
   rim.castShadow = false;
   group.add(rim);
 
-  for (let k = 0; k < (lite ? 3 : 6); k++) {
-    const y = CORE_Y + 0.55 + (k / (lite ? 2 : 5)) * (shaftH - 1.1);
-    geos.push(instanceCylinders(group, metalMat, [{ x: CX, y, z: CZ }], TUBE_R - 0.22, TUBE_R - 0.02, 0.09, lite ? 16 : 32).geo);
+  // Daños / escombros en la base (mismo vibe).
+  const damageMat = new THREE.MeshStandardMaterial({ color: 0x6a7578, metalness: 0.78, roughness: 0.42 });
+  const scorchedMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1210, metalness: 0.18, roughness: 0.92, emissive: 0x2a1008, emissiveIntensity: 0.25,
+  });
+  mats.push(damageMat, scorchedMat);
+  const debrisCount = lite ? 12 : 22;
+  for (let i = 0; i < debrisCount; i++) {
+    const a = (i / debrisCount) * Math.PI * 2 + ((i * 17) % 7) * 0.11;
+    const r = TUBE_R + 0.85 + ((i * 13) % 5) * 0.28 + (i % 3) * 0.1;
+    const px = CX + Math.cos(a) * r;
+    const pz = CZ + Math.sin(a) * r;
+    const kind = i % 5;
+    if (kind === 0) addBox(batch, solids, damageMat, px, 0.06 + (i % 4) * 0.015, pz, 0.75 + (i % 3) * 0.18, 0.07, 0.38 + (i % 2) * 0.14, false);
+    else if (kind === 1) addBox(batch, solids, damageMat, px, 0.12, pz, 0.42, 0.18, 0.26, false);
+    else if (kind === 2) addBox(batch, solids, scorchedMat, px, 0.02, pz, 0.95 + (i % 3) * 0.2, 0.03, 0.6 + (i % 2) * 0.25, false);
+    else if (kind === 3) addBox(batch, solids, damageMat, px, 0.28, pz, 0.1, 0.5, 0.1, false);
+    else addBox(batch, solids, damageMat, px, 0.08, pz, 0.3, 0.14, 0.48, false);
   }
 
-  solids.push(boxAt(CX, CORE_Y, CZ, CORE_R * 2, shaftH, CORE_R * 2));
-  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: CORE_Y + shaftH / 2, z: CZ }], CORE_R + 0.08, CORE_R, shaftH, 20).geo);
+  // Anillos estructurales del fuste (pisos de la torre).
+  for (let k = 0; k < (lite ? 4 : 7); k++) {
+    const y = 1.1 + (k / (lite ? 3 : 6)) * (shaftH - 2.2);
+    const stripe = k % 2 === 0 ? tomatoMat : creamMat;
+    addAnnulus(group, geos, stripe, CX, y, CZ, TUBE_R + 0.18, TUBE_R + 0.42, 0.22, lite ? 16 : 28);
+  }
 
+  // Fuste interior / exterior (metal wall-v4), hacia ARRIBA.
+  // Interior = BackSide: si no, desde dentro se ve a través y aparece el cartel café (Chimuelo).
+  const liningMat = (metalWallMat as THREE.Material).clone();
+  liningMat.side = THREE.BackSide;
+  mats.push(liningMat);
   const liningGeo = new THREE.CylinderGeometry(TUBE_R - 0.16, TUBE_R - 0.16, shaftH, lite ? 20 : 40, 1, true);
+  scaleOpenCylinderUVs(liningGeo, TUBE_R - 0.16, shaftH, 2.05);
   geos.push(liningGeo);
-  const lining = new THREE.Mesh(liningGeo, metalWallMat);
-  lining.position.set(CX, CORE_Y + shaftH / 2, CZ);
+  const lining = new THREE.Mesh(liningGeo, liningMat);
+  lining.name = "pozo-crusher-lining";
+  lining.position.set(CX, shaftH / 2, CZ);
   lining.castShadow = false;
   group.add(lining);
 
-  const hullGeo = new THREE.CylinderGeometry(TUBE_R + 0.22, TUBE_R + 0.22, shaftH, lite ? 20 : 40, 1, true);
+  const hullGeo = new THREE.CylinderGeometry(TUBE_R + 0.28, TUBE_R + 0.42, shaftH, lite ? 20 : 40, 1, true);
+  scaleOpenCylinderUVs(hullGeo, TUBE_R + 0.35, shaftH, 2.2);
   geos.push(hullGeo);
   const hull = new THREE.Mesh(hullGeo, metalWallMat);
-  hull.position.set(CX, CORE_Y + shaftH / 2, CZ);
-  hull.castShadow = false;
+  hull.name = "pozo-pizza-tower-hull";
+  hull.position.set(CX, shaftH / 2, CZ);
+  hull.castShadow = !lite;
   group.add(hull);
 
+  // Ventanas iluminadas (aros con huecos visuales + luces cálidas).
+  const windowMat = new THREE.MeshStandardMaterial({
+    color: 0xffe2a0,
+    emissive: 0xffb040,
+    emissiveIntensity: 1.4,
+    metalness: 0.05,
+    roughness: 0.25,
+    toneMapped: false,
+    transparent: true,
+    opacity: 0.92,
+  });
+  mats.push(windowMat);
+  const winGeo = new THREE.BoxGeometry(0.55, 0.85, 0.12);
+  geos.push(winGeo);
+  const floorCount = lite ? 4 : 6;
+  for (let f = 0; f < floorCount; f++) {
+    const fy = 2.2 + f * (shaftH - 3.5) / Math.max(1, floorCount - 1);
+    const nWin = lite ? 8 : 12;
+    for (let i = 0; i < nWin; i++) {
+      const a = (i / nWin) * Math.PI * 2 + f * 0.15;
+      const wr = TUBE_R + 0.36;
+      const pane = new THREE.Mesh(winGeo, windowMat);
+      pane.position.set(CX + Math.cos(a) * wr, fy, CZ + Math.sin(a) * wr);
+      pane.rotation.y = -a;
+      pane.castShadow = false;
+      group.add(pane);
+    }
+  }
+
+  // Corona / embudo arriba (el embudo de caída, ahora remate de torre).
+  const funnelH = 3.4;
+  const funnelRBot = TUBE_R + 0.2;
+  const funnelRTop = TUBE_R + 1.55;
+  const funnelGeo = new THREE.CylinderGeometry(funnelRTop, funnelRBot, funnelH, lite ? 20 : 40, 1, true);
+  scaleOpenCylinderUVs(funnelGeo, (funnelRTop + funnelRBot) * 0.5, funnelH, 1.85);
+  const funnel = new THREE.Mesh(funnelGeo, (metalWallMat as THREE.Material).clone());
+  funnel.name = "pozo-crusher-funnel";
+  (funnel.material as THREE.Material).side = THREE.DoubleSide;
+  mats.push(funnel.material as THREE.Material);
+  funnel.position.set(CX, PIT_Y + 1.1 + funnelH * 0.5, CZ);
+  geos.push(funnelGeo);
+  group.add(funnel);
+  // Franja tomate en la corona.
+  addAnnulus(group, geos, tomatoMat, CX, PIT_Y + 0.85, CZ, TUBE_R - 0.1, TUBE_R + 1.2, 0.28, 28);
+
+  // Costillas interiores del fuste.
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     addBox(
-      batch,
-      solids,
-      metalMat,
-      CX + Math.cos(a) * (TUBE_R - 0.28),
-      CORE_Y,
-      CZ + Math.sin(a) * (TUBE_R - 0.28),
-      0.12,
-      shaftH,
-      0.12,
-      false,
+      batch, solids, metalMat,
+      CX + Math.cos(a) * (TUBE_R - 0.28), 0.2, CZ + Math.sin(a) * (TUBE_R - 0.28),
+      0.12, shaftH - 0.4, 0.12, false,
     );
   }
 
+  // Piso intermedio y paredes del fuste; dejan huecos donde llega la escalera.
   const wallSegs = lite ? 16 : 28;
   const wallR = TUBE_R + 0.12;
   const wallBox = 0.7;
-  const lowerH = crypt - CORE_Y;
   for (let i = 0; i < wallSegs; i++) {
     const a = (i / wallSegs) * Math.PI * 2;
     const x = CX + Math.cos(a) * wallR;
     const z = CZ + Math.sin(a) * wallR;
-    addBox(batch, solids, metalMat, x, CORE_Y, z, wallBox, lowerH, wallBox);
-    const northDoor = Math.sin(a) > 0.58;
-    if (!northDoor) addBox(batch, solids, metalMat, x, crypt, z, wallBox, -crypt, wallBox);
+    // Hueco de acceso a media altura / cima por el lado de la escalera (sur-este).
+    const stairDoor = a > -0.55 && a < 0.85;
+    if (!stairDoor) addBox(batch, solids, metalMat, x, midY, z, wallBox, HALL_Y - midY, wallBox);
+    const groundDoor = Math.sin(a) > 0.55 || stairDoor;
+    if (!groundDoor) addBox(batch, solids, metalMat, x, 0.15, z, wallBox, midY - 0.15, wallBox);
   }
-  addBox(batch, solids, metalMat, CX, crypt - 0.1, CZ + TUBE_R - 0.55, 2.8, 0.12, 1.55);
-
-  const helix: THREE.Vector3[] = [];
-  const innerHelix: THREE.Vector3[] = [];
-  for (let i = 0; i < STEPS; i++) {
-    const t = i / Math.max(1, STEPS - 1);
-    const a = t * TURNS * Math.PI * 2;
-    const top = -i * RISE;
-    if (top < CORE_Y + 0.02) break;
-    const bottom = Math.max(CORE_Y, top - RISE);
-    const x = CX + Math.cos(a) * STAIR_R;
-    const z = CZ + Math.sin(a) * STAIR_R;
-    const tang = a + Math.PI / 2;
-    const along = 1.28;
-    const radial = 1.46;
-    const w = Math.max(0.84, Math.abs(Math.cos(tang)) * along + Math.abs(Math.cos(a)) * radial);
-    const d = Math.max(0.84, Math.abs(Math.sin(tang)) * along + Math.abs(Math.sin(a)) * radial);
-    addBox(batch, solids, metalMat, x, bottom, z, w, top - bottom, d);
-    helix.push(new THREE.Vector3(CX + Math.cos(a) * (STAIR_R + 0.7), top + 0.52, CZ + Math.sin(a) * (STAIR_R + 0.7)));
-    innerHelix.push(new THREE.Vector3(CX + Math.cos(a) * (STAIR_R - 0.72), top + 0.38, CZ + Math.sin(a) * (STAIR_R - 0.72)));
-    if (i % 3 === 0) waypoints.push({ x, y: top, z });
+  // Pasarela intermedia SOLO por fuera del fuste (anillo exterior).
+  // Evita el “cuadro café” rectangular que tapaba la vista al mirar hacia arriba.
+  {
+    const ringSegs = lite ? 16 : 24;
+    const ringR = TUBE_R + 1.55;
+    const ringW = 1.85;
+    for (let i = 0; i < ringSegs; i++) {
+      const a = (i / ringSegs) * Math.PI * 2;
+      addBox(
+        batch,
+        solids,
+        metalMat,
+        CX + Math.cos(a) * ringR,
+        midY - 0.18,
+        CZ + Math.sin(a) * ringR,
+        ringW,
+        0.18,
+        0.95,
+      );
+    }
   }
 
+  // Escalera de caracol exterior: peldaños ≤ 0.32 m (stepHeight del motor = 0.5).
+  // Da ~1.35 vueltas hasta la sala alta (cima), con descansos en midY y HALL_Y.
+  const hallR = 6.55;
   const railMat = new THREE.MeshStandardMaterial({
-    color: 0x9ffff2,
-    emissive: 0x3ae8d2,
-    emissiveIntensity: 1.15,
-    metalness: 0.55,
-    roughness: 0.18,
-    toneMapped: false,
+    color: 0x9ffff2, emissive: 0x3ae8d2, emissiveIntensity: 1.15,
+    metalness: 0.55, roughness: 0.18, toneMapped: false,
   });
   mats.push(railMat);
-  if (!lite && helix.length > 4) {
-    const outerRail = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(helix), 120, 0.055, 6, false);
-    const innerRail = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(innerHelix), 120, 0.04, 5, false);
-    geos.push(outerRail, innerRail);
-    const outerMesh = new THREE.Mesh(outerRail, railMat);
-    const innerMesh = new THREE.Mesh(innerRail, railMat);
-    outerMesh.castShadow = innerMesh.castShadow = false;
-    group.add(outerMesh, innerMesh);
+  {
+    const stepRise = 0.3;
+    const stairR = TUBE_R + 2.35;
+    const treadW = 1.55;
+    const treadD = 0.78;
+    const totalRise = HALL_Y;
+    const stepN = Math.ceil(totalRise / stepRise);
+    const turns = 1.35;
+    const railInner: THREE.Vector3[] = [];
+    const railOuter: THREE.Vector3[] = [];
+    for (let i = 0; i <= stepN; i++) {
+      const t = i / stepN;
+      const a = -Math.PI * 0.15 + t * turns * Math.PI * 2; // empieza al sur-este
+      const y = Math.min(HALL_Y, i * stepRise);
+      const x = CX + Math.cos(a) * stairR;
+      const z = CZ + Math.sin(a) * stairR;
+      if (i < stepN) {
+        const y0 = i * stepRise;
+        addBox(batch, solids, metalMat, x, y0, z, treadW, stepRise + 0.04, treadD);
+        // Peldaño orientado tangencialmente (caja axis-aligned: un poco más ancha radialmente).
+        const rx = CX + Math.cos(a) * (stairR + 0.55);
+        const rz = CZ + Math.sin(a) * (stairR + 0.55);
+        addBox(batch, solids, metalMat, rx, y0, rz, 0.35, stepRise + 0.04, treadD * 0.85, false);
+      }
+      // Descansos en piso medio y cima.
+      const nearMid = Math.abs(y - midY) < stepRise * 0.6;
+      const nearTop = Math.abs(y - HALL_Y) < stepRise * 0.6;
+      if (nearMid || nearTop || i % 8 === 0) {
+        addBox(batch, solids, metalMat, x, Math.max(0, y - 0.08), z, treadW + 0.9, 0.16, treadW + 0.5);
+        waypoints.push({ x, y, z });
+      }
+      railInner.push(new THREE.Vector3(
+        CX + Math.cos(a) * (stairR - treadW * 0.35),
+        y + 0.85,
+        CZ + Math.sin(a) * (stairR - treadW * 0.35),
+      ));
+      railOuter.push(new THREE.Vector3(
+        CX + Math.cos(a) * (stairR + treadW * 0.45),
+        y + 0.85,
+        CZ + Math.sin(a) * (stairR + treadW * 0.45),
+      ));
+    }
+    // Plataforma de llegada a la cima (conecta con el anillo de la sala).
+    const topA = -Math.PI * 0.15 + turns * Math.PI * 2;
+    const topX = CX + Math.cos(topA) * (stairR + 0.2);
+    const topZ = CZ + Math.sin(topA) * (stairR + 0.2);
+    addBox(batch, solids, metalMat, topX, HALL_Y - 0.12, topZ, 3.2, 0.2, 3.2);
+    // Pasarela corta hacia el anillo interior de la sala alta.
+    addBox(
+      batch, solids, metalMat,
+      CX + Math.cos(topA) * (hallR * 0.72),
+      HALL_Y - 0.12,
+      CZ + Math.sin(topA) * (hallR * 0.72),
+      2.4, 0.2, 2.4,
+    );
+    waypoints.push({ x: topX, y: HALL_Y, z: topZ });
+    for (const points of [railInner, railOuter]) {
+      const railGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), lite ? 40 : 72, 0.05, 5, false);
+      geos.push(railGeo);
+      const rail = new THREE.Mesh(railGeo, railMat);
+      rail.castShadow = false;
+      group.add(rail);
+    }
+  }
+  // Piso de la sala alta: RingGeometry (círculo limpio) + colisión fuera del pozo.
+  {
+    const hallFloorGeo = new THREE.RingGeometry(PIT_R + 0.08, hallR - 0.1, lite ? 28 : 48);
+    hallFloorGeo.rotateX(-Math.PI / 2);
+    geos.push(hallFloorGeo);
+    const hallFloor = new THREE.Mesh(hallFloorGeo, metalMat);
+    hallFloor.name = "pozo-tower-hall-floor";
+    hallFloor.position.set(CX, HALL_Y, CZ);
+    hallFloor.receiveShadow = !lite;
+    group.add(hallFloor);
+    const hallSegs = lite ? 18 : 28;
+    const hallRingR = (PIT_R + hallR) * 0.52;
+    const hallRingW = Math.max(0.9, (hallR - PIT_R) * 0.42);
+    for (let i = 0; i < hallSegs; i++) {
+      const a = (i / hallSegs) * Math.PI * 2;
+      addBox(
+        batch,
+        solids,
+        metalMat,
+        CX + Math.cos(a) * hallRingR,
+        HALL_Y - 0.16,
+        CZ + Math.sin(a) * hallRingR,
+        hallRingW,
+        0.16,
+        0.85,
+      );
+    }
   }
 
-  const hallR = 6.55;
-  punchRectHole(
-    (x, z, w, d) => addBox(batch, solids, metalMat, x, CORE_Y - 0.22, z, w, 0.22, d),
-    CX,
-    CZ,
-    PIT_R,
-    CX,
-    CZ,
-    hallR * 1.7,
-    hallR * 1.7,
-  );
   const pitFloorTex = loadTex("/textures/surfaces/lava-floor.webp", 1, 1);
   const pitFloorMat = new THREE.MeshLambertMaterial({
-    map: pitFloorTex,
-    color: 0xffffff,
-    emissive: 0xff4a18,
-    emissiveMap: pitFloorTex,
-    emissiveIntensity: 0.48,
+    map: pitFloorTex, color: 0xffffff, emissive: 0xff4a18, emissiveMap: pitFloorTex, emissiveIntensity: 0.48,
   });
   mats.push(pitFloorMat);
   const pitGeo = new THREE.CircleGeometry(PIT_R - 0.05, lite ? 18 : 24);
@@ -401,6 +658,7 @@ function buildCoreTube(
   pit.receiveShadow = false;
   group.add(pit);
   geos.push(pitGeo);
+
   const bladeMat = new THREE.MeshLambertMaterial({ color: 0xb7c0c8, emissive: 0xff3a12, emissiveIntensity: 0.34 });
   mats.push(bladeMat);
   const toothN = lite ? 5 : 8;
@@ -426,83 +684,91 @@ function buildCoreTube(
   };
   const rotorLo = makeRotor(PIT_Y + 0.55, PIT_R * 0.72);
   const rotorHi = makeRotor(PIT_Y + 1.45, PIT_R * 0.58);
-  const wellH = CORE_Y - PIT_Y;
+
+  const wellH = PIT_Y - HALL_Y;
+  const wellMat = (metalWallMat as THREE.Material).clone();
+  wellMat.side = THREE.BackSide;
+  mats.push(wellMat);
   const wellGeo = new THREE.CylinderGeometry(PIT_R, PIT_R, wellH, lite ? 16 : 24, 1, true);
-  const wellUv = wellGeo.getAttribute("uv") as THREE.BufferAttribute;
-  const around = (Math.PI * 2 * PIT_R) / 2.2;
-  const up = wellH / 2.2;
-  for (let i = 0; i < wellUv.count; i++) wellUv.setXY(i, (wellUv.getX(i) * around) / 4.2, (wellUv.getY(i) * up) / 7.2);
+  scaleOpenCylinderUVs(wellGeo, PIT_R, wellH, 1.9);
   geos.push(wellGeo);
-  const well = new THREE.Mesh(wellGeo, metalWallMat);
-  well.position.set(CX, PIT_Y + wellH / 2, CZ);
+  const well = new THREE.Mesh(wellGeo, wellMat);
+  well.name = "pozo-crusher-well";
+  well.position.set(CX, HALL_Y + wellH / 2, CZ);
   well.castShadow = false;
   group.add(well);
-  geos.push(instanceCylinders(group, metalMat, [{ x: CX, y: CORE_Y + 3.72, z: CZ }], TUBE_R + 0.2, hallR - 0.35, 0.18, 28).geo);
 
+  addAnnulus(group, geos, metalMat, CX, HALL_Y + 3.72, CZ, TUBE_R + 0.2, hallR - 0.35, 0.18, 28);
+
+  // Techo del anillo (sala alta).
+  const ceilInner = TUBE_R + 0.18;
+  const ceilOuter = hallR - 0.12;
+  const ceilY = HALL_Y + 3.58;
+  const ceilGeo = new THREE.RingGeometry(ceilInner, ceilOuter, lite ? 28 : 48);
+  ceilGeo.rotateX(Math.PI / 2);
+  const ceilPos = ceilGeo.getAttribute("position") as THREE.BufferAttribute;
+  const ceilUv = ceilGeo.getAttribute("uv") as THREE.BufferAttribute;
+  for (let i = 0; i < ceilUv.count; i++) ceilUv.setXY(i, ceilPos.getX(i) / 2.05, ceilPos.getZ(i) / 2.05);
+  ceilUv.needsUpdate = true;
+  geos.push(ceilGeo);
+  const ceilMat = (metalWallMat as THREE.Material).clone();
+  (ceilMat as THREE.Material).side = THREE.DoubleSide;
+  mats.push(ceilMat);
+  const ceil = new THREE.Mesh(ceilGeo, ceilMat);
+  ceil.name = "pozo-crusher-ceiling";
+  ceil.position.set(CX, ceilY, CZ);
+  ceil.castShadow = false;
+  ceil.receiveShadow = false;
+  group.add(ceil);
+
+  // Hazard crush: sigue activo en la cámara de rotores (arriba).
   hazards.push({
-    x: CX,
-    y: PIT_Y + 0.35,
-    z: CZ,
-    radius: PIT_R - 0.15,
-    damage: 999,
-    color: 0xff3a12,
-    crush: true,
+    x: CX, y: PIT_Y + 0.35, z: CZ,
+    radius: PIT_R - 0.15, damage: 999, color: 0xff3a12, crush: true,
   });
 
   for (let i = 0; i < 16; i++) {
     const a = (i / 16) * Math.PI * 2;
-    addBox(batch, solids, metalMat, CX + Math.cos(a) * hallR, CORE_Y, CZ + Math.sin(a) * hallR, 1.42, 3.7, 1.42);
+    const pillarX = CX + Math.cos(a) * hallR;
+    const pillarZ = CZ + Math.sin(a) * hallR;
+    if (pillarX > CX + 4.55 && Math.abs(pillarZ - CZ) < 6.2) continue;
+    addBox(batch, solids, metalMat, pillarX, HALL_Y, pillarZ, 1.42, 3.7, 1.42);
     addBox(
-      batch,
-      solids,
-      metalMat,
-      CX + Math.cos(a) * (hallR - 0.2),
-      CORE_Y + 2.2,
-      CZ + Math.sin(a) * (hallR - 0.2),
-      0.18,
-      0.18,
-      0.18,
-      false,
+      batch, solids, metalMat,
+      CX + Math.cos(a) * (hallR - 0.2), HALL_Y + 2.2, CZ + Math.sin(a) * (hallR - 0.2),
+      0.18, 0.18, 0.18, false,
     );
   }
 
-  const wallZ = CZ - hallR + 0.62;
-  addBox(batch, solids, metalMat, CX, CORE_Y, wallZ, 8.2, 3.5, 0.4);
+  // Muro + cartel Chimuelo en la cara EXTERIOR sur (no mirando al fuste).
+  const wallZ = CZ - hallR - 0.2;
+  addBox(batch, solids, metalMat, CX, HALL_Y, wallZ, 8.2, 3.5, 0.4);
   const signTex = chimueloWallTex();
   const signMat = new THREE.MeshStandardMaterial({
-    map: signTex,
-    emissiveMap: signTex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.9,
-    roughness: 0.3,
-    metalness: 0.16,
-    toneMapped: false,
+    map: signTex, emissiveMap: signTex, emissive: 0xffffff, emissiveIntensity: 0.9,
+    roughness: 0.3, metalness: 0.16, toneMapped: false,
   });
   mats.push(signMat);
   const signGeo = new THREE.PlaneGeometry(7.2, 2.5);
   geos.push(signGeo);
   const sign = new THREE.Mesh(signGeo, signMat);
-  sign.position.set(CX, CORE_Y + 2.02, wallZ + 0.24);
+  sign.name = "pozo-chimuelo-sign";
+  sign.position.set(CX, HALL_Y + 2.02, wallZ - 0.24);
+  sign.rotation.y = Math.PI; // mira hacia afuera (−Z)
   sign.castShadow = false;
   group.add(sign);
 
   const flagTex = respectFlagTex();
   const flagMat = new THREE.MeshStandardMaterial({
-    map: flagTex,
-    emissiveMap: flagTex,
-    emissive: 0xffffff,
-    emissiveIntensity: 0.22,
-    roughness: 0.55,
-    metalness: 0.08,
-    side: THREE.DoubleSide,
-    toneMapped: false,
+    map: flagTex, emissiveMap: flagTex, emissive: 0xffffff, emissiveIntensity: 0.22,
+    roughness: 0.55, metalness: 0.08, side: THREE.DoubleSide, toneMapped: false,
   });
   mats.push(flagMat);
-  hangRespectFlag(group, geos, mats, flagMat, CX - 3.5, CORE_Y, wallZ + 0.18, -1);
-  hangRespectFlag(group, geos, mats, flagMat, CX + 3.5, CORE_Y, wallZ + 0.18, 1);
+  hangRespectFlag(group, geos, mats, flagMat, CX - 3.5, HALL_Y, wallZ - 0.18, -1);
+  hangRespectFlag(group, geos, mats, flagMat, CX + 3.5, HALL_Y, wallZ - 0.18, 1);
 
   const plaqueL = new THREE.PointLight(0xe8fff8, 1.7, 9, 1.55);
-  plaqueL.position.set(CX, CORE_Y + 2.35, wallZ + 2.15);
+  plaqueL.position.set(CX, HALL_Y + 2.35, wallZ - 2.0);
   plaqueL.castShadow = false;
   group.add(plaqueL);
   const pitL = new THREE.PointLight(0xff4a18, 2.8, 11, 1.3);
@@ -510,14 +776,18 @@ function buildCoreTube(
   pitL.castShadow = false;
   group.add(pitL);
   if (!lite) {
-    const shaftL = new THREE.PointLight(0xc8d0d8, 1.4, 12, 1.5);
-    shaftL.position.set(CX, CORE_Y + shaftH * 0.55, CZ);
+    const shaftL = new THREE.PointLight(0xffc878, 1.8, 14, 1.5);
+    shaftL.position.set(CX, shaftH * 0.45, CZ);
     shaftL.castShadow = false;
     group.add(shaftL);
-    const mouthL = new THREE.PointLight(0x5ae8d8, 1.6, 8, 1.6);
-    mouthL.position.set(CX, 1.4, CZ);
+    const mouthL = new THREE.PointLight(0x5ae8d8, 2.2, 10, 1.6);
+    mouthL.position.set(CX, 1.6, CZ);
     mouthL.castShadow = false;
     group.add(mouthL);
+    const crownL = new THREE.PointLight(0xff5a30, 3.2, 12, 1.4);
+    crownL.position.set(CX, PIT_Y + 3.2, CZ);
+    crownL.castShadow = false;
+    group.add(crownL);
   }
 
   const smokeN = lite ? 12 : 22;
@@ -552,16 +822,8 @@ function buildCoreTube(
   geos.push(smokeGeo);
   const smokeMap = smokePuffTex();
   const smokeMat = new THREE.PointsMaterial({
-    map: smokeMap,
-    color: 0xffffff,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.7,
-    depthWrite: false,
-    blending: THREE.NormalBlending,
-    size: 2.8,
-    sizeAttenuation: true,
-    fog: true,
+    map: smokeMap, color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.7,
+    depthWrite: false, blending: THREE.NormalBlending, size: 2.8, sizeAttenuation: true, fog: true,
   });
   mats.push(smokeMat);
   const smoke = new THREE.Points(smokeGeo, smokeMat);
@@ -570,16 +832,21 @@ function buildCoreTube(
   group.add(smoke);
 
   items.push(
-    { id: "core-ion", kind: "ion", x: CX + 4.4, y: CORE_Y + 0.55, z: CZ + 1.7, respawn: 42 },
-    { id: "core-armor", kind: "armor", x: CX - 4.45, y: CORE_Y + 0.55, z: CZ - 1.35, respawn: 28 },
-    { id: "core-hp", kind: "health", x: CX + 0.2, y: CORE_Y + 0.55, z: CZ - 4.6, respawn: 22 },
+    { id: "core-ion", kind: "ion", x: CX + 4.4, y: HALL_Y + 0.55, z: CZ + 1.7, respawn: 42 },
+    { id: "core-armor", kind: "armor", x: CX - 4.45, y: HALL_Y + 0.55, z: CZ - 1.35, respawn: 28 },
+    { id: "core-hp", kind: "health", x: CX + 0.2, y: HALL_Y + 0.55, z: CZ - 4.6, respawn: 22 },
   );
-  waypoints.push({ x: CX + 4.2, y: CORE_Y, z: CZ }, { x: CX, y: 0, z: CZ }, { x: CX, y: crypt, z: CZ + TUBE_R + 0.6 });
+  waypoints.push(
+    { x: CX + 4.2, y: HALL_Y, z: CZ },
+    { x: CX, y: 0.2, z: CZ },
+    { x: CX, y: midY, z: CZ + TUBE_R + 0.6 },
+  );
 
   return {
     update: (now, dt) => {
       pitFloorMat.emissiveIntensity = 0.36 + 0.16 * (0.5 + 0.5 * Math.sin(now * 2.2));
       bladeMat.emissiveIntensity = 0.22 + 0.2 * (0.5 + 0.5 * Math.sin(now * 16));
+      windowMat.emissiveIntensity = 1.1 + 0.4 * (0.5 + 0.5 * Math.sin(now * 1.7));
       rotorLo.rotation.y = now * 3.6;
       rotorHi.rotation.y = -now * 4.8;
       pitL.intensity = 2.1 + 0.35 * Math.sin(now * 2.4);
@@ -611,6 +878,7 @@ function buildCoreTube(
   };
 }
 
+
 export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): ArenaData {
   const group = new THREE.Group();
   const solids: AABB[] = [];
@@ -625,7 +893,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   const floorMat = new THREE.MeshStandardMaterial({
     map: maps.floor,
     roughness: 0.7,
-    metalness: 0.48,
+    metalness: 0.18,
     color: 0xffffff,
     emissive: 0x2ee0c8,
     emissiveMap: maps.floor,
@@ -635,7 +903,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     map: maps.wall,
     color: 0xffffff,
     roughness: 0.58,
-    metalness: 0.52,
+    metalness: 0.22,
     emissive: 0x3ad4e8,
     emissiveMap: maps.wall,
     emissiveIntensity: 0.26,
@@ -745,15 +1013,20 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
     color: 0xffffff,
   });
   const tubeMetalTex = loadPozoSurface("industrial-teal", 2.4, 2.4);
-  const tubeMetalWallTex = loadPozoSurface("industrial-teal", 4.2, 7.2);
+  // Paredes del túnel de caída: metal vertical (wall-v4), no baldosas de piso
+  // industrial-teal — esas se leían como “techo” al mirar al pozo.
+  const shaftWallFile = isLoDevice() ? "/textures/pozo/wall-v4-mobile.webp" : "/textures/pozo/wall-v4.webp";
+  const tubeMetalWallTex = loadTex(shaftWallFile, 1, 1);
   const tubeMossTex = loadPozoSurface("alien-forest", 2.6, 2.6);
   const tubeMetalMat = new THREE.MeshLambertMaterial({
     map: tubeMetalTex,
     color: 0xc8ccd2,
   });
-  const tubeMetalWallMat = new THREE.MeshLambertMaterial({
+  const tubeMetalWallMat = new THREE.MeshStandardMaterial({
     map: tubeMetalWallTex,
-    color: 0xc2c6cc,
+    color: 0xc4c8ce,
+    roughness: 0.72,
+    metalness: 0.44,
     side: THREE.DoubleSide,
   });
   const tubeMossMat = new THREE.MeshLambertMaterial({
@@ -804,7 +1077,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   const ARENA_HALF = 55;
   const ARENA_SIZE = ARENA_HALF * 2 + 2;
   const cryptBrick = loadTex("/textures/crypt-brick.jpg", 3, 2);
-  const cryptArch = loadTex("/textures/crypt-arch.jpg", 4, 1);
+  const cryptArch = loadArenaSurface("pozo", 1, 2.5);
   const boneMat = new THREE.MeshLambertMaterial({
     map: cryptBrick,
     color: 0xc8c2b8,
@@ -813,9 +1086,10 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   });
   const archMat = new THREE.MeshLambertMaterial({
     map: cryptArch,
-    color: 0xd0cbc2,
-    emissive: 0x1c1814,
-    emissiveIntensity: 0.05,
+    color: 0xffffff,
+    emissive: 0xffffff,
+    emissiveMap: cryptArch,
+    emissiveIntensity: 0.12,
   });
   mats.push(boneMat, archMat);
   buildCatacombs(batch, solids, group, geos, mats, floorMat, boneMat, skullMat, emberMat, ARENA_SIZE, archMat);
@@ -843,23 +1117,94 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
   addBox(batch, solids, hazardMat, 0, 3.2, 54.05, 108, 0.12, 0.2, false);
   addBox(batch, solids, ionMat, -54.05, 6.2, 0, 0.18, 0.1, 108, false);
   addBox(batch, solids, ionMat, 54.05, 6.2, 0, 0.18, 0.1, 108, false);
-  addBox(batch, solids, consoleMat, 0, 0, 0, 7.2, 1.35, 7.2);
-  const altarCorners = [
-    [-3.6, -3.6],
-    [3.6, -3.6],
-    [3.6, 3.6],
-    [-3.6, 3.6],
-  ] as const;
-  geos.push(
-    instanceCylinders(
-      group,
-      consoleMat,
-      altarCorners.map(([x, z]) => ({ x, y: 0.675, z })),
-      0.95,
-      0.95,
-      1.35,
-    ).geo,
-  );
+  // Estacionamiento triangular de doble piso + estanterías lógicas (auto miniatura arriba).
+  {
+    const deck1 = 0.12;
+    const deck2 = 3.05;
+    const shelfMat = new THREE.MeshStandardMaterial({
+      color: 0x8a9694,
+      metalness: 0.55,
+      roughness: 0.4,
+      emissive: 0x1a403c,
+      emissiveIntensity: 0.2,
+    });
+    mats.push(shelfMat);
+    // Triángulo: punta al norte (+Z), base al sur.
+    const tri = [
+      [0, 6.2],
+      [-7.2, -5.4],
+      [7.2, -5.4],
+    ] as const;
+    // Losas: aproximación por cajas que cubren el triángulo.
+    addBox(batch, solids, consoleMat, 0, 0, 0.4, 14.6, deck1, 12.2);
+    addBox(batch, solids, consoleMat, 0, deck2 - 0.14, 0.4, 13.2, 0.14, 11.0);
+    // Pilares en vértices + centros de aristas.
+    const pillars = [
+      ...tri,
+      [(tri[0][0] + tri[1][0]) / 2, (tri[0][1] + tri[1][1]) / 2],
+      [(tri[0][0] + tri[2][0]) / 2, (tri[0][1] + tri[2][1]) / 2],
+      [(tri[1][0] + tri[2][0]) / 2, (tri[1][1] + tri[2][1]) / 2],
+    ] as const;
+    for (const [px, pz] of pillars) {
+      addBox(batch, solids, consoleMat, px, 0, pz, 0.55, deck2, 0.55);
+    }
+    // Barandas del piso alto (perímetro triangular).
+    const edges = [
+      [tri[0], tri[1]],
+      [tri[1], tri[2]],
+      [tri[2], tri[0]],
+    ] as const;
+    for (const [a, b] of edges) {
+      const mx = (a[0] + b[0]) / 2;
+      const mz = (a[1] + b[1]) / 2;
+      const dx = b[0] - a[0];
+      const dz = b[1] - a[1];
+      const len = Math.hypot(dx, dz);
+      addBox(batch, solids, ionMat, mx, deck2, mz, Math.abs(dx) > Math.abs(dz) ? len : 0.12, 0.55, Math.abs(dz) >= Math.abs(dx) ? len : 0.12, false);
+    }
+    // Rampa lógica: lado este del triángulo, piso bajo → alto (escalones ≤ stepHeight 0.5).
+    {
+      const steps = 10;
+      for (let i = 0; i < steps; i++) {
+        const t = (i + 0.5) / steps;
+        const y0 = (i / steps) * deck2;
+        const rise = deck2 / steps + 0.04;
+        const x = 4.2 + t * 1.6;
+        const z = -4.2 + t * 4.8;
+        addBox(batch, solids, consoleMat, x, y0, z, 1.55, rise, 0.72);
+      }
+    }
+    // Estanterías lógicas: bastidores en dos lados con anaqueles a alturas fijas.
+    const rackH = deck2 - 0.2;
+    const shelfYs = [0.45, 1.15, 1.85, 2.55];
+    const racks: Array<{ x: number; z: number; along: "x" | "z"; len: number }> = [
+      { x: -5.2, z: -1.2, along: "z", len: 6.4 },
+      { x: 5.2, z: -1.2, along: "z", len: 6.4 },
+      { x: 0, z: -4.6, along: "x", len: 8.5 },
+    ];
+    for (const rack of racks) {
+      const posts = rack.along === "z"
+        ? [[rack.x, rack.z - rack.len * 0.45], [rack.x, rack.z + rack.len * 0.45]]
+        : [[rack.x - rack.len * 0.45, rack.z], [rack.x + rack.len * 0.45, rack.z]];
+      for (const [px, pz] of posts) addBox(batch, solids, shelfMat, px, 0, pz, 0.12, rackH, 0.12, false);
+      for (const sy of shelfYs) {
+        if (rack.along === "z") addBox(batch, solids, shelfMat, rack.x, sy, rack.z, 0.55, 0.06, rack.len, false);
+        else addBox(batch, solids, shelfMat, rack.x, sy, rack.z, rack.len, 0.06, 0.55, false);
+      }
+      // Tope / larguero.
+      if (rack.along === "z") addBox(batch, solids, shelfMat, rack.x, rackH, rack.z, 0.14, 0.1, rack.len, false);
+      else addBox(batch, solids, shelfMat, rack.x, rackH, rack.z, rack.len, 0.1, 0.14, false);
+    }
+    // Luces de bahía bajo el piso alto.
+    if (!isLoDevice()) {
+      for (const [lx, lz] of [[-3, 1], [3, 1], [0, -2]] as const) {
+        const bay = new THREE.PointLight(0x7ff5e4, 1.3, 7, 1.6);
+        bay.position.set(lx, deck2 - 0.35, lz);
+        bay.castShadow = false;
+        group.add(bay);
+      }
+    }
+  }
 
   // Voxel ruins: stepped blocks give the arena a readable Minecraft-like silhouette
   // without replacing the existing industrial collision layout.
@@ -1268,7 +1613,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
       group,
       ringTopMat,
       [
-        { x: 0, y: 1.37, z: 0, w: 9.2, d: 9.2 },
+        { x: 0, y: 3.06, z: 0.4, w: 10.5, d: 9.2 },
         { x: 0, y: 3.47, z: -36, w: 28, d: 7 },
         { x: 0, y: 3.47, z: 36, w: 28, d: 7 },
         { x: -36, y: 3.47, z: 0, w: 7, d: 22 },
@@ -1339,7 +1684,7 @@ export function buildArena(scene: THREE.Scene, renderer?: THREE.WebGLRenderer): 
       updateSky(now);
     },
     startCycle,
-    killY: CORE_TUBE.y - 6.4,
+    killY: -22,
     dispose: () => {
       pozoCar.dispose();
       tubeFx.dispose();
@@ -1405,6 +1750,17 @@ function buildCatacombs(
   for (const [z0, z1, x0, x1] of bands) {
     addBox(batch, solids, floorMat, (x0 + x1) / 2, -1, (z0 + z1) / 2, x1 - x0, 1, z1 - z0);
   }
+  // A single world-aligned cover keeps texel density uniform across narrow bands.
+  // The original solid boxes and all shaft openings remain unchanged.
+  const deckTexture = loadArenaSurface("pozo");
+  const deckMaterial = new THREE.MeshLambertMaterial({
+    map: deckTexture, color: 0xffffff,
+    emissive: 0x2ee0c8, emissiveMap: deckTexture, emissiveIntensity: 0.12,
+  });
+  mats.push(deckMaterial);
+  geos.push(stampDecks(group, deckMaterial, bands.map(([z0, z1, x0, x1]) => ({
+    x: (x0 + x1) / 2, y: 0.006, z: (z0 + z1) / 2, w: x1 - x0, d: z1 - z0,
+  })), 4).geo);
 
   const crypt = -4.6;
   const deep = -9;
@@ -1412,7 +1768,9 @@ function buildCatacombs(
     addBox(batch, solids, boneMat, x, crypt - 1.1, z, w, 1.1, d);
   };
   cryptFloor(0, 38, 96, 20);
-  punchRectHole(cryptFloor, CORE_TUBE.x, CORE_TUBE.z, 4.9, 0, -19, 96, 58);
+  // La trituradora ya no baja: rellenar el suelo de cripta bajo la torre.
+  cryptFloor(CORE_TUBE.x, CORE_TUBE.z, 12, 12);
+  cryptFloor(0, -19, 96, 58);
   cryptFloor(-24.8, 14, 46.4, 8);
   cryptFloor(24.8, 14, 46.4, 8);
   cryptFloor(0, 19.025, 96, 2.05);

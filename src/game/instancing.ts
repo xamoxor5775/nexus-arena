@@ -43,6 +43,8 @@ function packBatch(
   const vcount = pos ? pos.count : 24;
   const icount = idx ? idx.count : 36;
   const mesh = new THREE.BatchedMesh(n, vcount, icount, mat);
+  // Opaque static scenery needs culling, not per-frame distance sorting.
+  mesh.sortObjects = mat.transparent;
   mesh.frustumCulled = true;
   mesh.perObjectFrustumCulled = true;
   mesh.castShadow = true;

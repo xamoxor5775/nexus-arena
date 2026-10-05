@@ -34,7 +34,7 @@ export const CHIBI_SPEC: FullbodySpec = {
   height: 1.38,
 };
 
-/* Bot roster models (kits 7-10). Optimised: webp textures + meshopt geometry. */
+/* Bot roster models (kits 7-14). Optimised: webp textures + meshopt geometry. */
 export const COWBOY_SPEC: FullbodySpec = {
   url: "/models/bots/agent-cowboy-v1.glb",
   name: "agentCowboy",
@@ -71,11 +71,56 @@ export const GOKU_SPEC: FullbodySpec = {
   armOut: 0.36,
 };
 
+
+export const NIGHT_VISION_SPEC: FullbodySpec = {
+  url: "/models/bots/night-vision-sf-v1.glb",
+  name: "nightVisionSf",
+  height: 1.78,
+  rigged: true,
+  hideGun: true,
+  armOut: 0.34,
+};
+
+export const SCIFI_POLLY_SPEC: FullbodySpec = {
+  url: "/models/bots/scifi-soldier-polly-v1.glb",
+  name: "scifiSoldierPolly",
+  height: 1.8,
+  rigged: true,
+  doubleSided: true,
+  hideGun: true,
+  armOut: 0.32,
+};
+
+export const SCIFI_ARTLOLL_SPEC: FullbodySpec = {
+  url: "/models/bots/scifi-trooper-artloll-v1.glb",
+  name: "scifiTrooperArtloll",
+  height: 1.82,
+  rigged: true,
+  doubleSided: true,
+  hideGun: true,
+  armOut: 0.4,
+};
+
+export const MODERN_SOLDIER_SPEC: FullbodySpec = {
+  url: "/models/bots/modern-soldier-v1.glb",
+  name: "modernSoldier",
+  height: 1.8,
+  rigged: true,
+  doubleSided: true,
+  alphaMask: true,
+  hideGun: true,
+  armOut: 0.32,
+};
+
 export const BOT_MODEL_SPECS: Record<number, FullbodySpec> = {
   7: COWBOY_SPEC,
   8: VENOM_SPEC,
   9: COWGIRL_SPEC,
   10: GOKU_SPEC,
+  11: NIGHT_VISION_SPEC,
+  12: SCIFI_POLLY_SPEC,
+  13: SCIFI_ARTLOLL_SPEC,
+  14: MODERN_SOLDIER_SPEC,
 };
 
 const FULLBODY_NAMES = new Set([STELLAR_SPEC.name, CHIBI_SPEC.name]);
@@ -230,7 +275,7 @@ export function attachBotModel(root: THREE.Group, head: THREE.Group, kit: number
 }
 
 export function preloadBotModels() {
-  for (const spec of Object.values(BOT_MODEL_SPECS)) preloadFullbodyGltf(spec).catch(() => undefined);
+  return Promise.allSettled(Object.values(BOT_MODEL_SPECS).map((spec) => preloadFullbodyGltf(spec))).then(() => undefined);
 }
 
 type StaticRig = {
@@ -238,7 +283,7 @@ type StaticRig = {
   state: { kick: number; wasFiring: boolean; clock: number };
 };
 
-/** Run / shoot animation for the roster models (kits 7-10). */
+/** Run / shoot animation for the roster models (kits 7-14). */
 export function driveBotModel(mesh: THREE.Group, pose: RigPose) {
   const mount = mesh.userData.gltfMount as THREE.Group | undefined;
   if (!mount) return;

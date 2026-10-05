@@ -1,12 +1,14 @@
 import * as THREE from "three";
 import { ArenaAudio } from "./audio";
 import { buildArena, makeItemMesh, type ArenaData } from "./arena";
-import { projectileTexture, isLoDevice, isStruggling } from "./textures";
+import { projectileTexture, isLoDevice, isStruggling, pozoParachuteTexture, waitForTextureLoads } from "./textures";
 import { buildLave } from "./lave";
 import { buildLaberinto } from "./laberinto";
 import { buildMoon } from "./moon";
 import { buildSummit } from "./summit";
 import { buildMar } from "./mar";
+import { preloadPozoSkyMoon } from "./pozoSkyMoon";
+import { preloadPozoCatacombActors } from "./pozoCatacombActors";
 import {
   AIR_ACCEL,
   AIR_WISH_CAP,
@@ -60,15 +62,17 @@ import { GameInput } from "./input";
 import { FrameLoop } from "./loop";
 import { localSnapshot, RemoteSync, type RemoteSnapshot } from "./network";
 import { accelerateWish, blockedAt, bodyBox, depenetrate, moveBody, overlaps, rayAABB, raycastWorld } from "./physics";
+import { normalizeQuality } from "./graphics";
 import { createArenaRenderer, type ArenaRenderer } from "./renderer";
 import type { ArenaId, ControlsProbe, HudSnapshot, KillFeedItem, PowerId, RoundPrize, Screen, Settings, ShopItemId, TeamId, WeaponId } from "./types";
 import { adsPose, restPose } from "./viewmodel";
 import { debugSpool } from "@/lib/debug-spool";
 
 export type { RemoteSnapshot } from "./network";
+import type { AcceptedHit, AcceptedKill } from "./pvp";
 
-/** Kit per bot slot: Gladiador goku, Operadora cowgirl, Ingeniero agent cowboy, Nyx venom. */
-const BOT_KITS = [10, 9, 7, 8] as const;
+/** Kit per bot slot: Gladiador night-vision, Operadora scifi-polly, Ingeniero artloll, Nyx modern-soldier. */
+const BOT_KITS = [11, 12, 13, 14] as const;
 const _look = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
@@ -82,6 +86,8 @@ type Fighter = {
   name: string;
   isPlayer: boolean;
   isRemote: boolean;
+  /** Peer id for remote humans (id without "remote:"), cached to avoid per-frame string slicing. */
+  peerId: string;
   color: number;
   colorCss: string;
   pos: THREE.Vector3;
@@ -174,7 +180,15 @@ export type EngineHooks = {
   onScreen: (s: Screen) => void;
   onLock: (locked: boolean) => void;
   onArenaCycleStart?: (epochMs: number) => void;
+  /** The local player hit a remote human: report it to the victim (victim-authoritative). */
+  onRemoteHit?: (victimPeerId: string, hit: AcceptedHit) => void;
+  /** The local player died: broadcast so every peer credits the killer. */
+  onLocalDeath?: (death: { killer: string | null; killerName: string | null; weapon: WeaponId | "world"; headshot: boolean }) => void;
 };
+
+const REMOTE_PREFIX = "remote:";
+const peerIdOf = (f: Fighter) => f.peerId;
+const _netDir = new THREE.Vector3();
 
 export class NexusArena {
   input = new GameInput();
@@ -206,6 +220,15 @@ export class NexusArena {
   private locked = false;
   private hadLock = false;
   private countdown: number | null = null;
+  /** True once entry frames are smooth enough for 3-2-1 to run. */
+  private countdownLive = false;
+  private countdownPaused = false;
+  private steadyFrames = 0;
+  private entryMark = 0;
+  private entryHitchMs = 0;
+  private entryReleased = false;
+  private worldPrimed = false;
+  private primeFrames = 0;
   private matchOn = false;
   private orbitT = 0.8;
   private pickupMsg: string | null = null;
@@ -224,6 +247,7 @@ export class NexusArena {
   private credits = 35;
   private score = 0;
   private careerXp = 0;
+  private careerWins = 0;
   private nextPrize: RoundPrize | null = null;
   private prizeText: string | null = null;
   private leveled = false;
@@ -275,12 +299,12 @@ export class NexusArena {
     this.hooks = hooks;
     this.reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     this.loadCareer();
-    preloadWeaponPack();
-    // roster bots use the user-supplied models; older kits (alien, sentinel, chibi) load lazily
-    preloadBotModels();
     const skin = SKINS[settings.skin] ?? SKINS.cian;
-    this.view = createArenaRenderer(canvas, settings.fov, skin.color);
+    this.view = createArenaRenderer(canvas, settings.fov, skin.color, normalizeQuality(settings.quality));
     this.arena = buildArena(this.view.scene, this.view.renderer);
+    this.view.applyQuality();
+    // Roster models start after the arena images are already queued.
+    preloadBotModels();
     this.view.scene.add(this.fx.mesh);
     this.rockets.mesh.frustumCulled = false;
     this.ions.mesh.frustumCulled = false;
@@ -301,7 +325,7 @@ export class NexusArena {
         false,
       );
       bot.skill = 0.8 + i * 0.06;
-      // Gladiador: goku (10), Operadora: cowgirl (9), Ingeniero: agent cowboy (7), Nyx: venom (8)
+      // Gladiador: night-vision (11), Operadora: scifi-polly (12), Ingeniero: artloll (13), Nyx: modern-soldier (14)
       bot.mesh = makeBotMesh(bot.color, BOT_KITS[i] ?? i);
       this.view.scene.add(bot.mesh);
       this.fighters.push(bot);
@@ -379,6 +403,7 @@ export class NexusArena {
     const next = s.mode === "duel" ? { ...s, bots: 1, fragLimit: 8 } : s;
     this.settings = { ...next };
     this.view.setWorldFov(next.fov);
+    this.view.setQuality(normalizeQuality(next.quality));
     this.audio.setVolume(next.volume);
     this.player.name = next.name || "Raven";
     const skin = SKINS[next.skin] ?? SKINS.cian;
@@ -396,6 +421,23 @@ export class NexusArena {
         debugSpool.error("engine.arena", err);
       }
     }
+  }
+
+  async prepareArena(onProgress?: (value: number) => void) {
+    onProgress?.(0.08);
+    this.ensureArena(this.settings.arena);
+    onProgress?.(0.22);
+    const models = Promise.allSettled([
+      preloadBotModels(),
+      preloadWeaponPack(),
+      ...(this.settings.arena === "pozo" ? [preloadPozoSkyMoon(), preloadPozoCatacombActors()] : []),
+    ]);
+    const modelDeadline = new Promise<void>((resolve) => window.setTimeout(resolve, 6500));
+    await Promise.all([
+      Promise.race([models.then(() => undefined), modelDeadline]),
+      waitForTextureLoads(6500, (value) => onProgress?.(0.22 + value * 0.7)),
+    ]);
+    onProgress?.(1);
   }
 
   private mountItems() {
@@ -455,6 +497,7 @@ export class NexusArena {
       this.arena.startCycle?.(this.arenaCycleEpochMs);
     }
     this.mountItems();
+    this.view.applyQuality();
   }
 
   private arenaG() {
@@ -591,7 +634,6 @@ export class NexusArena {
     this.streakUntil = 0;
     this.firstBlood = true;
     this.teamScore = { ion: 0, ember: 0 };
-    this.countdown = 3;
     this.assignTeams();
     this.mountFlags();
     for (const f of this.fighters) {
@@ -602,6 +644,7 @@ export class NexusArena {
       this.spawn(f);
     }
     this.applyPrize();
+    this.armEntryCountdown();
     this.setScreen("playing");
     const touch = (navigator.maxTouchPoints ?? 0) > 0 || window.matchMedia("(pointer: coarse)").matches;
     if (!touch) this.requestLock();
@@ -723,6 +766,40 @@ export class NexusArena {
     this.net.ingest(id, snapshot);
   }
 
+  /**
+   * A remote human reports hitting the local player (already validated,
+   * deduped and clamped by PvpInbox). We are authoritative over our own
+   * health: hurtFighter ignores it when dead or respawn-protected, and a
+   * lethal hit goes through kill() → onLocalDeath → `kill` broadcast.
+   */
+  applyNetworkHit(shooterPeerId: string, hit: AcceptedHit): boolean {
+    if (!this.matchOn || !this.player.alive) return false;
+    // Entry countdown (3-2-1, which may wait for smooth frames): the local
+    // player is frozen and cannot fight back, so remote hits are ignored.
+    if (this.countdown !== null) return false;
+    const attacker = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${shooterPeerId}`);
+    if (!attacker) return false;
+    _netDir.set(hit.dir[0], hit.dir[1], hit.dir[2]);
+    this.hurtFighter(this.player, hit.damage, attacker, hit.weapon, _netDir, hit.knock, hit.headshot);
+    return true;
+  }
+
+  /** A remote human announced its own death: killfeed + frags on this client. */
+  applyNetworkKill(kill: AcceptedKill): boolean {
+    const victim = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${kill.victim}`);
+    if (!victim) return false;
+    let killer: Fighter | null = null;
+    if (kill.killer === "self") killer = this.player;
+    else if (kill.killer) killer = this.fighters.find((f) => f.id === `${REMOTE_PREFIX}${kill.killer}`) ?? null;
+    // The victim's unreliable snapshot may already have flagged it dead; the
+    // kill must still be credited exactly once, so run kill() regardless.
+    victim.alive = true;
+    this.kill(victim, killer, kill.weapon, kill.headshot, killer ? undefined : (kill.killerName ?? undefined));
+    // Short guard so a late pre-death snapshot cannot revive the replica.
+    victim.respawnAt = performance.now() / 1000 + 0.35;
+    return true;
+  }
+
   buyShopItem(_id: ShopItemId): boolean {
     return false;
   }
@@ -796,6 +873,7 @@ export class NexusArena {
       name,
       isPlayer,
       isRemote,
+      peerId: isRemote && id.startsWith(REMOTE_PREFIX) ? id.slice(REMOTE_PREFIX.length) : id,
       color,
       colorCss,
       pos: new THREE.Vector3(),
@@ -852,8 +930,9 @@ export class NexusArena {
     try {
       const raw = localStorage.getItem(CAREER_KEY);
       if (!raw) return;
-      const data = JSON.parse(raw) as { xp?: number; prize?: RoundPrize | null };
+      const data = JSON.parse(raw) as { xp?: number; prize?: RoundPrize | null; wins?: number };
       this.careerXp = Math.max(0, data.xp ?? 0);
+      this.careerWins = Math.max(0, data.wins ?? 0);
       this.nextPrize = data.prize ?? null;
       this.prizeText = data.prize ? PRIZE_LABEL[data.prize] : null;
     } catch {
@@ -863,7 +942,7 @@ export class NexusArena {
 
   private saveCareer() {
     try {
-      localStorage.setItem(CAREER_KEY, JSON.stringify({ xp: this.careerXp, prize: this.nextPrize }));
+      localStorage.setItem(CAREER_KEY, JSON.stringify({ xp: this.careerXp, prize: this.nextPrize, wins: this.careerWins }));
     } catch {
       /* ignore */
     }
@@ -902,9 +981,10 @@ export class NexusArena {
     this.pickupT = 2.4;
   }
 
-  private closeRound() {
+  private closeRound(playerWon = false) {
     if (this.careerSettled) return;
     this.careerSettled = true;
+    if (playerWon) this.careerWins += 1;
     const before = levelFromXp(this.careerXp);
     this.careerXp += Math.max(0, this.score);
     this.leveled = levelFromXp(this.careerXp) > before;
@@ -961,11 +1041,13 @@ export class NexusArena {
       if (f.isPlayer || f.isRemote) continue;
       const on = i < n;
       i++;
-      if (!on && f.alive) {
+      if (!on && f.respawnAt !== 1e12) {
+        // 1e12 marca "bot desactivado": spawn() lo ignora y el marcador lo oculta.
         f.alive = false;
         f.respawnAt = 1e12;
       }
       if (on && f.respawnAt === 1e12) {
+        f.respawnAt = 0;
         this.resetLoadout(f);
         this.fullLoadout(f);
         this.spawn(f);
@@ -975,6 +1057,8 @@ export class NexusArena {
   }
 
   private spawn(f: Fighter) {
+    // Bots desactivados por el tope (duelo / humanos remotos) no reaparecen.
+    if (f.respawnAt === 1e12 && !f.isPlayer && !f.isRemote) return;
     const others = this.fighters.filter((o) => o.alive && o !== f);
     const teamPool = this.arena.spawns.filter((s) => s.team === f.team);
     const list = this.isCtf() && teamPool.length ? teamPool : this.arena.spawns;
@@ -1023,6 +1107,7 @@ export class NexusArena {
     if (this.disposed) return;
     const now = nowMs / 1000;
     const dt = this.loop.begin(nowMs);
+    this.noteEntry(dt);
     try {
       this.input.pollGamepad();
       this.loop.consumeFixed((step) => this.fixed(step, now));
@@ -1061,10 +1146,74 @@ export class NexusArena {
     this.input.endFrame();
   };
 
+  /** Paint the player view once so the arena is on screen before 3-2-1 is visible. */
+  private warmPlayerView() {
+    const camera = this.view.camera;
+    camera.position.set(this.player.pos.x, this.player.pos.y + this.eyeY, this.player.pos.z);
+    camera.quaternion.setFromEuler(new THREE.Euler(this.player.pitch, this.player.yaw, 0, "YXZ"));
+    camera.updateMatrixWorld();
+    try {
+      this.view.renderer.compile(this.view.scene, camera);
+      this.view.renderer.compile(this.view.gunScene, this.view.gunCam);
+      this.view.render(true);
+    } catch (err) {
+      debugSpool.error("engine.warm", err);
+    }
+  }
+
+  private armEntryCountdown() {
+    this.countdownLive = false;
+    this.countdownPaused = false;
+    this.steadyFrames = 0;
+    this.entryHitchMs = 0;
+    this.warmPlayerView();
+    this.entryMark = performance.now();
+    this.countdown = 3;
+  }
+
+  private releaseEntryLoad() {
+    if (this.entryReleased) return;
+    this.entryReleased = true;
+    preloadWeaponPack();
+    window.dispatchEvent(new CustomEvent("nexus-entry-warm"));
+  }
+
+  private noteEntry(dt: number) {
+    if (!this.worldPrimed && this.screen !== "playing") {
+      this.primeFrames += 1;
+      if (this.primeFrames >= 2) {
+        this.warmPlayerView();
+        this.worldPrimed = true;
+      }
+    }
+    if (this.countdown === null || this.screen !== "playing") {
+      this.countdownPaused = false;
+      return;
+    }
+    const hitch = dt > 0.05;
+    if (!this.countdownLive) {
+      this.steadyFrames = hitch ? 0 : this.steadyFrames + 1;
+      if (this.steadyFrames >= 3 || performance.now() - this.entryMark > 2800) {
+        this.countdownLive = true;
+        this.releaseEntryLoad();
+      }
+      return;
+    }
+    if (hitch && this.entryHitchMs < 1500) {
+      this.entryHitchMs += dt * 1000;
+      this.countdownPaused = true;
+    } else {
+      this.countdownPaused = false;
+    }
+  }
+
   private fixed(dt: number, now: number) {
+    if (this.countdown !== null && !this.countdownLive) return;
     if (this.countdown !== null && this.screen === "playing") {
-      this.countdown -= dt;
-      if (this.countdown <= 0) this.countdown = null;
+      if (!this.countdownPaused) {
+        this.countdown -= dt;
+        if (this.countdown <= 0) this.countdown = null;
+      }
     }
 
     if (this.screen === "playing" && this.countdown === null && this.matchOn) {
@@ -1090,6 +1239,18 @@ export class NexusArena {
           f.vel.set(0, 0, 0);
         }
         if (!f.isRemote && this.matchOn && now >= f.respawnAt && f.respawnAt < 1e11) this.spawn(f);
+        if (f.isRemote) {
+          // Respawn is victim-driven: revive the replica when its own snapshot says alive.
+          // latest() no interpola ni asigna objetos: basta para saber si ya reapareció.
+          const snap = this.net.latest(f.peerId);
+          if (snap?.alive && now >= f.respawnAt) {
+            f.alive = true;
+            f.health = snap.health;
+            f.vel.set(0, 0, 0);
+            f.pos.set(snap.x, snap.y, snap.z);
+            if (f.mesh) resetFighterMesh(f.mesh);
+          }
+        }
         if (f.alive) continue;
         if (f.isPlayer && this.crushT >= 0) {
           if (f.mesh && f.mesh.visible) {
@@ -1138,8 +1299,7 @@ export class NexusArena {
         continue;
       }
       if (f.isRemote) {
-        const remoteId = f.id.startsWith("remote:") ? f.id.slice("remote:".length) : f.id;
-        const snap = this.net.sample(remoteId, dt);
+        const snap = this.net.sample(f.peerId, dt);
         if (snap) {
           f.pos.set(snap.x, snap.y, snap.z);
           f.yaw = snap.yaw;
@@ -1602,7 +1762,7 @@ export class NexusArena {
       this.fx.burnSmoke(f.pos.x, f.pos.y + 0.35, f.pos.z);
       this.fx.shotImpact(f.pos.x, f.pos.y + 0.55, f.pos.z, hazard.color, _dir.x, _dir.y, _dir.z, false, true);
       if (f.isPlayer) {
-        this.pickupMsg = "LAVA · TE QUEMAS";
+        this.pickupMsg = hazard.label ?? "LAVA · TE QUEMAS";
         this.pickupT = 0.85;
       }
       return;
@@ -1992,6 +2152,23 @@ export class NexusArena {
     if (!f.alive) return;
     if (this.isCtf() && attacker && attacker !== f && attacker.team === f.team) return;
     const now = performance.now() / 1000;
+    if (f.isRemote) {
+      // Remote humans own their health: only the local player's hits are
+      // reported (to the victim); nothing is applied or killed locally.
+      if (attacker?.isPlayer && weapon !== "world" && amount > 0) {
+        this.hooks.onRemoteHit?.(peerIdOf(f), {
+          weapon,
+          damage: amount,
+          headshot,
+          dir: [dir.x, dir.y, dir.z],
+          knock,
+        });
+        this.audio.hit();
+        const mat = f.mesh?.userData.flashMat as THREE.MeshStandardMaterial | undefined;
+        if (mat) mat.emissiveIntensity = 1.4;
+      }
+      return;
+    }
     if (now < f.protectUntil && attacker && attacker !== f) return;
     let dmg = amount;
     if (f.armor > 0) {
@@ -2061,7 +2238,7 @@ export class NexusArena {
     return _crush.set(x + Math.cos(spin) * spread, y, z + Math.sin(spin) * spread);
   }
 
-  private kill(f: Fighter, attacker: Fighter | null, weapon: WeaponId | "world", headshot: boolean) {
+  private kill(f: Fighter, attacker: Fighter | null, weapon: WeaponId | "world", headshot: boolean, killerLabel?: string) {
     if (!f.alive) return;
     f.alive = false;
     f.deaths += 1;
@@ -2136,12 +2313,21 @@ export class NexusArena {
         if (headshot) this.audio.headshot();
         else this.audio.frag();
       }
-    } else if (f.isPlayer) {
+    } else if (f.isPlayer || (f.isRemote && !killerLabel)) {
       f.frags = Math.max(0, f.frags - 1);
+    }
+    if (f.isPlayer) {
+      const killer = attacker && attacker !== f ? attacker : null;
+      this.hooks.onLocalDeath?.({
+        killer: killer?.isRemote ? peerIdOf(killer) : null,
+        killerName: killer ? killer.name : null,
+        weapon,
+        headshot,
+      });
     }
     this.killFeed.unshift({
       id: ++this.feedSeq,
-      attacker: attacker && attacker !== f ? attacker.name : f.name,
+      attacker: attacker && attacker !== f ? attacker.name : (killerLabel ?? f.name),
       victim: f.name,
       weapon,
       headshot,
@@ -2183,7 +2369,7 @@ export class NexusArena {
           this.grant(140, 650, "CAMPEÓN");
         }
         this.playEndCue(f.isPlayer ? 1 : this.playerPlace() === 2 ? 2 : 0);
-        this.closeRound();
+        this.closeRound(f.isPlayer);
         this.unlock();
         this.setScreen("ended");
         try {
@@ -2204,7 +2390,7 @@ export class NexusArena {
     this.matchOn = false;
     if (this.player.team === team) this.grant(140, 650, "CAPTURA · CAMPEÓN");
     this.playEndCue(this.player.team === team ? 1 : 0);
-    this.closeRound();
+    this.closeRound(this.player.team === team);
     this.unlock();
     this.setScreen("ended");
   }
@@ -2232,7 +2418,7 @@ export class NexusArena {
       this.grant(45, 180, "SUBCAMPEÓN · +45 CR");
     }
     this.playEndCue(ranked[0]?.isPlayer ? 1 : ranked[1]?.isPlayer ? 2 : 0);
-    this.closeRound();
+    this.closeRound(ranked[0]?.isPlayer === true);
     this.unlock();
     this.setScreen("ended");
   }
@@ -2768,9 +2954,12 @@ export class NexusArena {
       live.add(f.id);
       let chute = this.chutes.get(f.id);
       if (!chute) {
+        const chuteTexture = pozoParachuteTexture();
         const mat = new THREE.MeshStandardMaterial({
-          color: 0x143832,
+          map: chuteTexture,
+          color: 0xffffff,
           emissive: 0x7ff5e4,
+          emissiveMap: chuteTexture,
           emissiveIntensity: 0.95,
           roughness: 0.32,
           metalness: 0.42,
@@ -3002,7 +3191,7 @@ export class NexusArena {
       hurt: this.hurt,
       killFeed: this.killFeed,
       scoreboard: this.fighters
-        .filter((f) => f.isPlayer || this.fighters.filter((x) => !x.isPlayer).indexOf(f) < this.settings.bots)
+        .filter((f) => f.isPlayer || f.isRemote || f.respawnAt !== 1e12)
         .map((f) => ({
           name: f.name,
           color: f.colorCss,

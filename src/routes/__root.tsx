@@ -5,11 +5,12 @@ import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { debugSpool } from "@/lib/debug-spool";
 import { bootGoogleAds } from "@/lib/google-ads";
 import appCss from "../styles.css?url";
+import landingCss from "../landing.css?url";
 
 const APP_NAME = "NEXUS ARENA";
 const APP_URL = "https://nexusarena.cl/";
 const APP_DESC =
-  "FPS deathmatch en el navegador. Acceso 30 días por $1.000 CLP. Cinco armas, bots letales y arena industrial. Pagas con Flow y entras sin instalar.";
+  "FPS deathmatch gratis en el navegador. Juega online o contra bots, sin instalar. Cinco armas, bots letales y arena industrial.";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -41,6 +42,7 @@ export const Route = createRootRoute({
       { rel: "canonical", href: APP_URL },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "stylesheet", href: appCss },
+      { rel: "stylesheet", href: landingCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
     ],

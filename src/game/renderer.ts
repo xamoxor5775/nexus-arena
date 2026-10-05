@@ -1,10 +1,12 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { MELEE_ORDER, WEAPON_ORDER } from "./constants";
-import { hitchMs, isLoDevice, noteGpuFrame } from "./textures";
+import { DynamicResolution, qualityPreset, type QualityId, type QualityPreset } from "./graphics";
+import { isLoDevice, noteGpuFrame, setTextureAnisotropy } from "./textures";
 import type { WeaponId } from "./types";
 import { buildViewmodel } from "./viewmodel";
 import { cancelWeaponPack } from "./weaponPack";
+import { SKINS_CHANGED } from "@/skins/skins";
 
 export type ArenaRenderer = {
   renderer: THREE.WebGLRenderer;
@@ -19,6 +21,9 @@ export type ArenaRenderer = {
   noteFrame: (dt: number) => void;
   setWorldFov: (fov: number) => void;
   rebuildGuns: (accent: number) => void;
+  setQuality: (id: QualityId) => void;
+  applyQuality: () => void;
+  qualityState: () => { preset: QualityId; scale: number; shadows: boolean; fps: number; msaa: boolean };
   dispose: () => void;
 };
 
@@ -44,22 +49,26 @@ function dropGuns(gunRoot: THREE.Group, guns: Map<WeaponId, THREE.Group>) {
   guns.clear();
 }
 
-export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, accent = 0x7af0ff): ArenaRenderer {
+export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, accent = 0x7af0ff, quality: QualityId = "auto"): ArenaRenderer {
   const lowPower = isLoDevice();
+  const dpr = () => window.devicePixelRatio || 1;
+  let preset: QualityPreset = qualityPreset(quality, dpr(), lowPower);
+  const msaa = preset.msaa && !lowPower;
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: false,
+    antialias: msaa,
     powerPreference: "high-performance",
     alpha: false,
   });
-  let pixelRatio = Math.min(window.devicePixelRatio || 1, lowPower ? 0.85 : 1);
+  let dyn = new DynamicResolution(preset);
+  let pixelRatio = preset.adaptive ? dyn.scale : preset.maxScale;
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(canvas.clientWidth || 1, canvas.clientHeight || 1, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.12;
   renderer.autoClear = false;
-  renderer.shadowMap.enabled = !lowPower;
+  renderer.shadowMap.enabled = !lowPower && preset.shadows;
   renderer.shadowMap.autoUpdate = false;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
@@ -70,7 +79,7 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
   gunCam.layers.set(1);
 
   const gunRoot = new THREE.Group();
-  gunRoot.scale.setScalar(1.22);
+  gunRoot.scale.setScalar(1.28);
   gunScene.add(gunRoot);
   let pmrem: THREE.PMREMGenerator | null = null;
   let studio: THREE.WebGLRenderTarget | null = null;
@@ -104,10 +113,15 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
 
   const guns = new Map<WeaponId, THREE.Group>();
   mountGuns(gunRoot, guns, accent);
+  let gunAccent = accent;
   const rebuildGuns = (next: number) => {
+    gunAccent = next;
     dropGuns(gunRoot, guns);
     mountGuns(gunRoot, guns, next);
   };
+  // Weapon skins (ARSENAL): swap first-person models when the selection changes.
+  const onSkins = () => rebuildGuns(gunAccent);
+  window.addEventListener(SKINS_CHANGED, onSkins);
 
   const resize = () => {
     const w = canvas.clientWidth || window.innerWidth;
@@ -138,22 +152,81 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
     camera.updateProjectionMatrix();
   };
 
-  let lastTune = 0;
+  let lastFrameAt = 0;
+  const setScale = (next: number) => {
+    if (Math.abs(next - pixelRatio) < 0.01) return;
+    pixelRatio = next;
+    renderer.setPixelRatio(pixelRatio);
+  };
+  const setShadows = (on: boolean) => {
+    const want = on && !lowPower;
+    if (renderer.shadowMap.enabled === want) return;
+    renderer.shadowMap.enabled = want;
+    renderer.shadowMap.needsUpdate = true;
+    scene.traverse((o) => {
+      const l = o as THREE.DirectionalLight;
+      if (l.isLight && l.shadow) l.shadow.needsUpdate = true;
+    });
+  };
   const noteFrame = (dt: number) => {
     noteGpuFrame(dt);
     const t = performance.now();
-    if (t - lastTune < 400) return;
-    lastTune = t;
-    const ms = hitchMs();
-    const floor = lowPower || ms > 22 ? 0.62 : 0.78;
-    if (ms > 16.8 && pixelRatio > floor) {
-      pixelRatio = Math.max(floor, Math.round((pixelRatio - 0.1) * 100) / 100);
-      renderer.setPixelRatio(pixelRatio);
-    }
-    if (ms > 20 && renderer.shadowMap.enabled) renderer.shadowMap.enabled = false;
+    const ms = lastFrameAt ? t - lastFrameAt : 0;
+    lastFrameAt = t;
+    if (!preset.adaptive) return;
+    const d = dyn.frame(ms, t);
+    if (!d) return;
+    if (d.changed) setScale(d.scale);
+    if (d.shadowChanged) setShadows(d.shadows);
   };
 
+  const applyQuality = () => {
+    setTextureAnisotropy(preset.anisotropy);
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
+    scene.traverse((o) => {
+      const l = o as THREE.DirectionalLight | THREE.SpotLight;
+      if (l.isLight && l.castShadow && l.shadow) {
+        const size = lowPower ? 512 : preset.shadowMap;
+        if (l.shadow.mapSize.x !== size) {
+          l.shadow.mapSize.set(size, size);
+          l.shadow.map?.dispose();
+          l.shadow.map = null;
+        }
+        l.shadow.radius = lowPower ? 1 : preset.shadowRadius;
+        l.shadow.needsUpdate = true;
+      }
+      const mesh = o as THREE.Mesh;
+      const mats = mesh.isMesh ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) : [];
+      for (const m of mats) {
+        const map = (m as THREE.MeshStandardMaterial).map;
+        if (map && map.generateMipmaps && map.minFilter !== THREE.NearestFilter && map.anisotropy > 1) {
+          const a = Math.min(maxAniso, Math.max(2, preset.anisotropy));
+          if (map.anisotropy !== a) map.anisotropy = a;
+        }
+      }
+    });
+    renderer.shadowMap.needsUpdate = true;
+  };
+
+  const setQuality = (id: QualityId) => {
+    if (id === preset.id) return;
+    preset = qualityPreset(id, dpr(), lowPower);
+    dyn = new DynamicResolution(preset, pixelRatio);
+    setScale(preset.adaptive ? dyn.scale : preset.maxScale);
+    setShadows(preset.shadows);
+    applyQuality();
+  };
+
+  const qualityState = () => ({
+    preset: preset.id,
+    scale: pixelRatio,
+    shadows: renderer.shadowMap.enabled,
+    fps: Math.round(dyn.lastFps),
+    msaa,
+  });
+
   const dispose = () => {
+    window.removeEventListener(SKINS_CHANGED, onSkins);
     dropGuns(gunRoot, guns);
     studio?.dispose();
     pmrem?.dispose();
@@ -161,5 +234,6 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
   };
 
   resize();
-  return { renderer, scene, gunScene, camera, gunCam, gunRoot, guns, resize, render, noteFrame, setWorldFov, rebuildGuns, dispose };
+  applyQuality();
+  return { renderer, scene, gunScene, camera, gunCam, gunRoot, guns, resize, render, noteFrame, setWorldFov, rebuildGuns, setQuality, applyQuality, qualityState, dispose };
 }
