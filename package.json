@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
     "test": "node --test 'scripts/**/*.test.mjs' && npm run test:app",
-    "test:app": "node --experimental-strip-types --test src/lib/flow-contract.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/game/pvp.test.ts src/game/rooms.test.ts src/lib/rtc.server.test.ts src/lib/dev-room.test.ts src/game/dev-lock.test.ts src/game/demo.test.ts src/lib/skin-contract.test.ts",
+    "test:app": "node --experimental-strip-types --test src/lib/flow-contract.test.ts src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/game/pvp.test.ts src/game/rooms.test.ts src/lib/rtc.server.test.ts src/lib/dev-room.test.ts src/game/dev-lock.test.ts src/game/demo.test.ts src/lib/skin-contract.test.ts src/lib/client-ip.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

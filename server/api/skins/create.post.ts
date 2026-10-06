@@ -1,13 +1,14 @@
-import { defineEventHandler, getRequestIP, readBody, setResponseStatus } from "h3";
+import { defineEventHandler, readBody, setResponseStatus } from "h3";
 import { FlowCheckoutError } from "../../../src/lib/flow.server";
 import { createSkinPayment } from "../../../src/lib/skins.server";
-import { EMAIL_RE, skinProduct } from "../../../src/lib/skin-store";
+import { EMAIL_RE, flowEmailError, skinProduct } from "../../../src/lib/skin-store";
+import { clientIp } from "../../client-ip";
 import { makeLimiter } from "../../rate-limit";
 
 const limited = makeLimiter(12, 10 * 60 * 1000);
 
 export default defineEventHandler(async (event) => {
-  if (limited(getRequestIP(event, { xForwardedFor: true }) || "local")) {
+  if (limited(clientIp(event))) {
     setResponseStatus(event, 429);
     return { error: "Demasiados intentos. Espera unos minutos." };
   }
@@ -27,6 +28,12 @@ export default defineEventHandler(async (event) => {
     if (!EMAIL_RE.test(email)) {
       setResponseStatus(event, 400);
       return { error: "Ingresa un correo válido" };
+    }
+    // Before creating the order row or calling Flow: Flow rejects '+' (error 1620) and would leave a 'failed' row.
+    const flowError = flowEmailError(email);
+    if (flowError) {
+      setResponseStatus(event, 400);
+      return { error: flowError };
     }
     return await createSkinPayment(product, name, email);
   } catch (error) {

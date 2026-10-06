@@ -60,3 +60,21 @@ export function normalizeEmail(raw: string): string {
 }
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Stricter pattern for emails we send to Flow: production Flow rejects e.g. "nombre+algo@gmail.com"
+ * (error 1620 "userEmail is not valid"). Only letters, digits, ".", "_" and "-" before the @.
+ * We never strip the "+" silently: ownership of the skins is tied to the exact email.
+ */
+export const FLOW_EMAIL_RE = /^[a-z0-9._-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
+
+export const FLOW_EMAIL_PLUS_ERROR = "Flow no acepta correos con '+'. Usa tu correo sin el '+' (por ejemplo nombre@gmail.com).";
+export const FLOW_EMAIL_CHARS_ERROR =
+  "Flow solo acepta correos con letras, números, puntos, guiones o guion bajo antes de la @ (por ejemplo nombre@gmail.com).";
+
+/** Error message (Spanish) if Flow would reject this (already normalized) email, else null. */
+export function flowEmailError(email: string): string | null {
+  if (email.includes("+")) return FLOW_EMAIL_PLUS_ERROR;
+  if (!FLOW_EMAIL_RE.test(email)) return FLOW_EMAIL_CHARS_ERROR;
+  return null;
+}

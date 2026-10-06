@@ -1,5 +1,6 @@
-import { defineEventHandler, getRequestIP, readBody, setResponseStatus } from "h3";
+import { defineEventHandler, readBody, setResponseStatus } from "h3";
 import { recoverPaidAccess } from "../../../src/lib/flow.server";
+import { clientIp } from "../../client-ip";
 
 const hits = new Map<string, number[]>();
 
@@ -21,7 +22,7 @@ function limited(ip: string): boolean {
 }
 
 export default defineEventHandler(async (event) => {
-  const ip = getRequestIP(event, { xForwardedFor: true }) || "local";
+  const ip = clientIp(event);
   if (limited(ip)) {
     setResponseStatus(event, 429);
     return { access: false, error: "Demasiados intentos. Espera unos minutos." };

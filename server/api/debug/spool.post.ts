@@ -1,5 +1,6 @@
 import { defineEventHandler, readBody, setResponseStatus } from "h3";
 import { appendSpool } from "../../../src/lib/debug-spool.server";
+import { clientIp } from "../../client-ip";
 
 type Incoming = {
   t?: string;
@@ -13,11 +14,6 @@ type Incoming = {
 const WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 12;
 const hits = (globalThis as typeof globalThis & { __nexusSpoolHits__?: Map<string, { n: number; until: number }> }).__nexusSpoolHits__ ??= new Map();
-
-function clientKey(headers: Headers) {
-  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || headers.get("x-real-ip") || "local";
-}
 
 function allow(key: string) {
   const now = Date.now();
@@ -36,7 +32,7 @@ function allow(key: string) {
 }
 
 export default defineEventHandler(async (event) => {
-  if (!allow(clientKey(event.req.headers))) {
+  if (!allow(clientIp(event))) {
     setResponseStatus(event, 204);
     return null;
   }
