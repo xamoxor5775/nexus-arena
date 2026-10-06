@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { DEFAULT_SETTINGS, isPlaceholderPilotName, normalizeArena, normalizeMode, normalizeTouchHand, normalizeTouchOrder, randomPilotName, sanitizePilotName, SETTINGS_KEY } from "./constants";
+import { DEFAULT_SETTINGS, isPlaceholderPilotName, normalizeArena, normalizeMode, normalizeTouchHand, normalizeTouchOrder, normalizeViewMode, randomPilotName, sanitizePilotName, SETTINGS_KEY } from "./constants";
 import { lockSettings, patchLocked, persistable, unlockSettings, type DevLock } from "./dev-lock";
 import { normalizeQuality } from "./graphics";
 import type { ArenaId, HudSnapshot, Screen, Settings } from "./types";
@@ -36,6 +36,7 @@ function loadSettings(): Settings {
         touchHand: normalizeTouchHand(parsed.touchHand),
         touchOrder: normalizeTouchOrder(parsed.touchOrder),
         quality: normalizeQuality(parsed.quality),
+        viewMode: normalizeViewMode(parsed.viewMode),
       },
       parsed.name,
     );

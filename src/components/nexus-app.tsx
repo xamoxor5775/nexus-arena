@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, Crosshair, Pause, Play, Settings as SettingsIcon, Skull, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import type { NexusArena, RemoteSnapshot } from "@/game/engine";
-import { BEST_KEY, CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, isArenaId, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
+import { BEST_KEY, CAREER_KEY, MELEE_ORDER, PRIZE_LABEL, SKINS, TEAM_META, TOUCH_ACTIONS, VIEW_MODE_LABEL, WEAPON_META, WEAPON_ORDER, XP_PER_LEVEL, isArenaId, levelFromXp, publicRoomId, roomOverflowIndex } from "@/game/constants";
 import { QUALITY_ORDER, qualityPreset, type QualityId } from "@/game/graphics";
 import { PvpInbox, makeHitMessage, makeKillMessage } from "@/game/pvp";
 import type { ArenaId, RoundPrize, SkinId, TouchActionId } from "@/game/types";
@@ -121,6 +121,7 @@ export function NexusApp({ demo }: { demo?: { onExit: () => void } } = {}) {
           onHud: (h) => useArena.getState().setHud(h),
           onScreen: (s) => useArena.getState().setScreen(s),
           onLock: () => {},
+          onViewMode: (viewMode) => useArena.getState().patchSettings({ viewMode }),
           onArenaCycleStart: (epochMs) => {
             arenaCycleEpochRef.current = epochMs;
             if (roomHostRef.current === selfIdRef.current) {
@@ -920,6 +921,11 @@ function SettingsPanel({ onBack }: { onBack: () => void }) {
       <div className="mt-2">
         <PickBtn on={settings.mode === "duel"} locked={devLocked} title="Duelo" hint="Un rival, ocho frags" onClick={() => patch({ mode: "duel", bots: 1, fragLimit: 8 })} />
       </div>
+      <p className="nx-kicker text-ion mt-4">Vista</p>
+      <div className="nx-pick-row nx-pick-modes mt-2" role="group" aria-label="Vista de cámara">
+        <PickBtn on={settings.viewMode !== "third"} title={VIEW_MODE_LABEL.first} hint="Vista clásica con brazos y arma" onClick={() => patch({ viewMode: "first" })} />
+        <PickBtn on={settings.viewMode === "third"} title={VIEW_MODE_LABEL.third} hint="Cámara sobre el hombro · tecla T" onClick={() => patch({ viewMode: "third" })} />
+      </div>
       <QualityPicker quality={settings.quality} onPick={(quality) => patch({ quality })} />
       <div className="nx-modal-grid">
         <Slider label={isTouch ? "Sensibilidad de la mira" : "Sensibilidad del mouse"} value={settings.sens} min={0.3} max={2.4} step={0.05} onChange={(v) => patch({ sens: v })} />
@@ -1077,6 +1083,7 @@ function HelpPanel({ onBack }: { onBack: () => void }) {
             <KeyRow keys={["Shift"]} action="Sprint" />
             <KeyRow keys={["C"]} action="Agacharte" />
             <KeyRow keys={["V"]} action="Sacar o guardar el arma cuerpo a cuerpo" />
+            <KeyRow keys={["T"]} action="Vista: primera / tercera persona (también en Ajustes y Pausa)" />
             <KeyRow keys={["1", "2", "3", "4", "5", "6"]} action="Cambiar arma" />
             <KeyRow keys={["R"]} action="Recargar" />
             <KeyRow keys={["G"]} action="Granada de píxeles" />
@@ -1320,6 +1327,8 @@ function formatRoundTime(seconds: number) {
 }
 
 function PauseLayer() {
+  const viewMode = useArena((s) => s.settings.viewMode);
+  const patch = useArena((s) => s.patchSettings);
   return (
     <div className="absolute inset-0 z-20 grid place-items-center bg-bg/70 p-4">
       <div className="nx-plate w-[min(92vw,22rem)] p-6">
@@ -1328,9 +1337,12 @@ function PauseLayer() {
           <SteelBtn primary onClick={() => window.dispatchEvent(new CustomEvent("nexus-resume"))}>
             Reanudar
           </SteelBtn>
+          <SteelBtn onClick={() => patch({ viewMode: viewMode === "third" ? "first" : "third" })}>
+            Vista: {VIEW_MODE_LABEL[viewMode === "third" ? "third" : "first"]}
+          </SteelBtn>
           <SteelBtn onClick={() => window.dispatchEvent(new CustomEvent("nexus-menu"))}>Menú</SteelBtn>
         </div>
-        <p className="nx-stat mt-4 text-copy">Esc para reanudar</p>
+        <p className="nx-stat mt-4 text-copy">Esc para reanudar · T cambia la vista</p>
       </div>
     </div>
   );
