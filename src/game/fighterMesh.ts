@@ -11,6 +11,7 @@ import {
 } from "./sentinelGltf";
 import { loadTex } from "./textures";
 import { buildWorldGun } from "./viewmodel";
+import type { WeaponId } from "./types";
 
 export type FighterPose = {
   speed: number;
@@ -404,7 +405,8 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   beaconR.position.x *= -1;
   torso.add(idCell, beaconL, beaconR, armL, armR);
 
-  const gun = buildWorldGun(steel, suit, visor, k === 2 ? "scatter" : k === 3 ? "lance" : k === 0 ? "torpedo" : "pulse");
+  const gunStyle: WeaponId = k === 2 ? "scatter" : k === 3 ? "lance" : k === 0 ? "torpedo" : "pulse";
+  const gun = buildWorldGun(steel, suit, visor, gunStyle);
   gun.name = "worldGun";
   gun.position.set(0.02, 0.02, 0.16);
   gun.rotation.x = 0.15;
@@ -420,6 +422,8 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   root.add(hips);
 
   root.userData.flashMat = glow;
+  root.userData.gunMats = { steel, suit, visor };
+  root.userData.gunStyle = gunStyle;
   root.userData.idGlow = idGlow;
   root.userData.cycle = 0;
   root.userData.kit = gltfBust ? 4 : gltfFull ? kit : k;
@@ -454,6 +458,36 @@ export function makeBotMesh(color: number, kit = 0): THREE.Group {
   if (kit === 6) attachChibiGltf(root, head);
   if (kit >= 7 && kit <= 14) attachBotModel(root, head, kit);
   return root;
+}
+
+/**
+ * Swap the world gun to `style` (used by the local player's third-person body).
+ * Built guns are cached inside "worldGun" and toggled, so switching weapons
+ * never allocates after the first time and never disposes shared materials.
+ */
+export function setFighterWeapon(mesh: THREE.Group, style: WeaponId) {
+  if (mesh.userData.gunStyle === style) return;
+  const gun = partsOf(mesh)?.gun;
+  const mats = mesh.userData.gunMats as { steel: THREE.Material; suit: THREE.Material; visor: THREE.Material } | undefined;
+  if (!gun || !mats) return;
+  let cache = gun.userData.styles as Map<WeaponId, THREE.Group> | undefined;
+  if (!cache) {
+    cache = new Map();
+    const first = new THREE.Group();
+    for (const child of [...gun.children]) first.add(child);
+    gun.add(first);
+    cache.set(mesh.userData.gunStyle as WeaponId, first);
+    gun.userData.styles = cache;
+  }
+  let next = cache.get(style);
+  if (!next) {
+    next = buildWorldGun(mats.steel, mats.suit, mats.visor, style);
+    shadow(next);
+    gun.add(next);
+    cache.set(style, next);
+  }
+  for (const [id, g] of cache) g.visible = id === style;
+  mesh.userData.gunStyle = style;
 }
 
 export function resetFighterMesh(mesh: THREE.Group) {

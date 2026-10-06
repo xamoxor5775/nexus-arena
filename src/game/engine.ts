@@ -55,7 +55,7 @@ import {
 } from "./constants";
 import { packViewportScale, preloadWeaponPack, setPackAim } from "./weaponPack";
 import { preloadBotModels } from "./sentinelGltf";
-import { animateFighter, crackFighter, makeBotMesh, resetFighterMesh, shatterFighter } from "./fighterMesh";
+import { animateFighter, crackFighter, makeBotMesh, resetFighterMesh, setFighterWeapon, shatterFighter } from "./fighterMesh";
 import { ParticleField, TraumaShake } from "./fx";
 import { BeamBatch, InstancePool } from "./instancing";
 import { GameInput } from "./input";
@@ -64,7 +64,7 @@ import { localSnapshot, RemoteSync, type RemoteSnapshot } from "./network";
 import { accelerateWish, blockedAt, bodyBox, depenetrate, moveBody, overlaps, rayAABB, raycastWorld } from "./physics";
 import { normalizeQuality } from "./graphics";
 import { createArenaRenderer, type ArenaRenderer } from "./renderer";
-import type { ArenaId, ControlsProbe, HudSnapshot, KillFeedItem, PowerId, RoundPrize, Screen, Settings, ShopItemId, TeamId, WeaponId } from "./types";
+import type { ArenaId, ControlsProbe, HudSnapshot, KillFeedItem, PowerId, RoundPrize, Screen, Settings, ShopItemId, TeamId, ViewMode, WeaponId } from "./types";
 import { adsPose, restPose } from "./viewmodel";
 import { debugSpool } from "@/lib/debug-spool";
 
@@ -80,6 +80,27 @@ const _wish = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _crush = new THREE.Vector3();
+
+/*
+ * Tercera persona: cámara "sobre el hombro" detrás y por encima del jugador.
+ * Offsets en metros, relativos a los ojos y a la orientación de la cámara.
+ */
+const TP_DIST = 3.1; // detrás de la cabeza
+const TP_DIST_AIM = 1.8; // apuntando con clic derecho (armas sin telescopio)
+const TP_SIDE = 0.62; // hacia el hombro derecho
+const TP_UP = 0.34; // por encima de los ojos
+const TP_PAD = 0.22; // margen que se deja contra paredes / techo
+const TP_BODY_MIN = 0.8; // si la cámara queda más cerca, el cuerpo propio se oculta (taparía la mira)
+const TP_AIM_RANGE = 260; // alcance del rayo cámara → mira para elegir el punto de impacto
+/** Kit del cuerpo propio en tercera persona: modelo con rig animado y arma visible (no lo usan los bots). */
+const PLAYER_KIT = 7;
+const _tpBack = new THREE.Vector3();
+const _tpRight = new THREE.Vector3();
+const _tpWant = new THREE.Vector3();
+const _tpEye = new THREE.Vector3();
+const _tpRay = new THREE.Vector3();
+const _tpTmp = new THREE.Vector3();
+const _tpEuler = new THREE.Euler(0, 0, 0, "YXZ");
 
 type Fighter = {
   id: string;
@@ -184,6 +205,8 @@ export type EngineHooks = {
   onRemoteHit?: (victimPeerId: string, hit: AcceptedHit) => void;
   /** The local player died: broadcast so every peer credits the killer. */
   onLocalDeath?: (death: { killer: string | null; killerName: string | null; weapon: WeaponId | "world"; headshot: boolean }) => void;
+  /** The player pressed T: persist the new camera view in the settings store. */
+  onViewMode?: (mode: ViewMode) => void;
 };
 
 const REMOTE_PREFIX = "remote:";
@@ -267,6 +290,19 @@ export class NexusArena {
   private swayY = 0;
   private fovKick = 0;
   private scopeZoom: Partial<Record<WeaponId, number>> = {};
+  /** Cuerpo propio (solo visible en tercera persona). No es f.mesh: así kill/spawn/bots no lo tocan. */
+  private selfMesh: THREE.Group | null = null;
+  /** 0 = primera persona, 1 = tercera persona (transición suave). */
+  private tpBlend = 0;
+  /** Fracción libre del brazo de cámara (colisión): baja de golpe, vuelve suave. */
+  private tpFrac = 1;
+  private tpDist = TP_DIST;
+  /** Distancia real cámara-cabeza del último frame. */
+  private tpCamDist = 0;
+  /** Posición de cámara (sin temblor) del último frame: origen del rayo de la mira. */
+  private tpCam = new THREE.Vector3();
+  private tpPivot = new THREE.Vector3();
+  private tpPivotReady = false;
   private laser!: THREE.Line;
   private laserDot!: THREE.Mesh;
   private nextStepAt = 0;
@@ -314,6 +350,9 @@ export class NexusArena {
 
     this.player = this.makeFighter("you", settings.name, skin.color, skin.css, true);
     this.fighters.push(this.player);
+    this.selfMesh = makeBotMesh(skin.color, PLAYER_KIT);
+    this.selfMesh.visible = false;
+    this.view.scene.add(this.selfMesh);
     this.spawn(this.player);
 
     for (let i = 0; i < 4; i++) {
@@ -381,6 +420,7 @@ export class NexusArena {
         if (mat && !Array.isArray(mat)) mat.dispose();
       });
     }
+    if (this.selfMesh) this.view.scene.remove(this.selfMesh);
     this.view.scene.remove(this.laser, this.laserDot);
     this.laser.geometry.dispose();
     (this.laser.material as THREE.Material).dispose();
@@ -1095,6 +1135,13 @@ export class NexusArena {
       this.crushT = -1;
       this.hurt = 0;
       this.eyeY = EYE;
+      this.tpPivotReady = false;
+      if (this.selfMesh) {
+        resetFighterMesh(this.selfMesh);
+        this.selfMesh.visible = false;
+        this.selfMesh.position.copy(f.pos);
+        this.selfMesh.rotation.set(0, f.yaw, 0);
+      }
     }
     if (f.mesh) {
       resetFighterMesh(f.mesh);
@@ -1126,7 +1173,7 @@ export class NexusArena {
       }
     }
     try {
-      this.view.render(this.screen === "playing" && this.player.alive);
+      this.view.render(this.screen === "playing" && this.player.alive && this.tpBlend < 0.3);
       this.view.noteFrame(dt);
     } catch (err) {
       if (this.frameFails < 8) {
@@ -1134,6 +1181,7 @@ export class NexusArena {
         debugSpool.error("engine.render", err, { n: this.frameFails });
       }
     }
+    if (this.input.viewToggle && this.screen === "playing") this.toggleView();
     this.hudClock += dt;
     if (this.hudClock > 0.05) {
       this.hudClock = 0;
@@ -1845,6 +1893,47 @@ export class NexusArena {
   private lookVec(f: Fighter, out: THREE.Vector3) {
     const cy = Math.cos(f.pitch);
     out.set(-Math.sin(f.yaw) * cy, Math.sin(f.pitch), -Math.cos(f.yaw) * cy);
+    if (f.isPlayer && f.alive && this.tpBlend > 0.001) this.aimThroughCrosshair(f, out);
+    return out;
+  }
+
+  /**
+   * Tercera persona: la mira está en el centro de la pantalla, pero los ojos no
+   * están en la cámara. Lanza un rayo desde la cámara por la mira (arena + rivales),
+   * toma el punto de impacto y deja `look` apuntando de los ojos a ese punto, para que
+   * balas, proyectiles, granadas y blink vayan donde marca la mira.
+   */
+  private aimThroughCrosshair(f: Fighter, look: THREE.Vector3) {
+    _tpEye.set(f.pos.x, f.pos.y + this.eyeY, f.pos.z);
+    // Arranca el rayo a la altura de la cabeza: lo que hay entre la cámara y el jugador no cuenta.
+    const t0 = Math.max(0, _tpTmp.subVectors(_tpEye, this.tpCam).dot(look));
+    _tpRay.copy(this.tpCam).addScaledVector(look, t0);
+    const hit = this.hitscan(_tpRay, look, TP_AIM_RANGE, f.id);
+    _tpTmp.subVectors(hit.point, _tpEye);
+    const d = _tpTmp.length();
+    // Muy cerca (pegado a una pared) la corrección se vuelve inestable: se dispara recto.
+    if (d > 1.2) look.copy(_tpTmp).multiplyScalar(1 / d);
+  }
+
+  private thirdPerson() {
+    return this.settings.viewMode === "third";
+  }
+
+  private toggleView() {
+    const next: ViewMode = this.thirdPerson() ? "first" : "third";
+    this.settings = { ...this.settings, viewMode: next };
+    this.pickupMsg = next === "third" ? "VISTA · TERCERA PERSONA" : "VISTA · PRIMERA PERSONA";
+    this.pickupT = 1.2;
+    this.hooks.onViewMode?.(next);
+  }
+
+  /** Visual muzzle point: the third-person body's gun when it is on screen, else the eye origin. */
+  private shotFrom(f: Fighter, origin: THREE.Vector3, look: THREE.Vector3, out: THREE.Vector3) {
+    out.copy(origin);
+    if (!f.isPlayer || this.tpBlend < 0.5 || !this.selfMesh?.visible) return out;
+    const gun = this.selfMesh.getObjectByName("worldGun");
+    if (!gun || !gun.visible) return out;
+    gun.getWorldPosition(out).addScaledVector(look, 0.22);
     return out;
   }
 
@@ -1879,8 +1968,9 @@ export class NexusArena {
     this.lookVec(f, _look);
     const eye = f.isPlayer ? this.eyeY : f.height * 0.88;
     _origin.copy(f.pos).add(new THREE.Vector3(0, eye, 0)).addScaledVector(_look, 0.35);
-    if (w === "ion" && !volt) this.fx.ionMuzzle(_origin.x, _origin.y, _origin.z, _look.x, _look.y, _look.z);
-    else this.fx.muzzle(_origin.x, _origin.y, _origin.z, _look.x, _look.y, _look.z, volt ? POWER_META.volt.color : meta.color);
+    const fxFrom = this.shotFrom(f, _origin, _look, new THREE.Vector3());
+    if (w === "ion" && !volt) this.fx.ionMuzzle(fxFrom.x, fxFrom.y, fxFrom.z, _look.x, _look.y, _look.z);
+    else this.fx.muzzle(fxFrom.x, fxFrom.y, fxFrom.z, _look.x, _look.y, _look.z, volt ? POWER_META.volt.color : meta.color);
 
     if (meta.kind === "hitscan") {
       let flashed = false;
@@ -1895,7 +1985,7 @@ export class NexusArena {
         const hit = this.hitscan(_origin, _dir, meta.range, f.id);
         const shotColor = volt ? POWER_META.volt.color : meta.color;
         if (w === "lance" || w === "pulse" || volt || ((w === "scatter" || w === "fauces") && !flashed)) {
-          this.spawnBeam(_origin, hit.point, shotColor, w === "lance" ? 0.22 : 0.1);
+          this.spawnBeam(fxFrom, hit.point, shotColor, w === "lance" ? 0.22 : 0.1);
         }
         this.fx.shotImpact(
           hit.point.x,
@@ -3058,6 +3148,8 @@ export class NexusArena {
     if (this.screen === "menu" || this.screen === "settings" || this.screen === "help" || this.screen === "ended" || this.screen === "skin") {
       this.laser.visible = false;
       this.laserDot.visible = false;
+      if (this.selfMesh) this.selfMesh.visible = false;
+      this.tpPivotReady = false;
       this.orbitT += dt * 0.12;
       const luna = this.arenaId === "luna";
       const maze = this.arenaId === "laberinto";
@@ -3122,6 +3214,20 @@ export class NexusArena {
       camera.quaternion.setFromEuler(new THREE.Euler(this.player.pitch, this.player.yaw, 0, "YXZ"));
     }
 
+    // Tercera persona: el telescopio y la muerte por trituración vuelven a primera persona.
+    const tpWant = this.thirdPerson() && !zooming && !(dying && this.crushT >= 0);
+    this.tpBlend += ((tpWant ? 1 : 0) - this.tpBlend) * (1 - Math.exp(-(tpWant ? 8 : 14) * dt));
+    if (tpWant && this.tpBlend > 0.995) this.tpBlend = 1;
+    if (!tpWant && this.tpBlend < 0.005) this.tpBlend = 0;
+    if (this.tpBlend > 0) {
+      this.placeThirdPersonCamera(camera, dt, dying, shake);
+    } else {
+      this.tpCam.copy(camera.position);
+      this.tpCamDist = 0;
+      this.tpPivotReady = false;
+    }
+    this.syncSelfMesh(dt, now, dying);
+
     const rest = restPose(this.player.weapon);
     const ads = adsPose(this.player.weapon);
     this.adsT += ((this.input.aimHeld ? 1 : 0) - this.adsT) * (1 - Math.exp(-14 * dt));
@@ -3144,7 +3250,7 @@ export class NexusArena {
     for (const [id, g] of guns) {
       if (id === this.player.weapon) setPackAim(g, id, t);
       const scoped = id === this.player.weapon && !!SCOPE[id] && t > 0.82;
-      g.visible = id === this.player.weapon && this.player.alive && this.screen === "playing" && !scoped;
+      g.visible = id === this.player.weapon && this.player.alive && this.screen === "playing" && !scoped && this.tpBlend < 0.3;
       g.traverse((obj) => {
         if (obj.name === "vm-sleeve") obj.visible = t < 0.45;
       });
@@ -3159,6 +3265,98 @@ export class NexusArena {
         muzzle.scale.setScalar(flashScale);
       }
     }
+  }
+
+  /**
+   * Over-the-shoulder chase camera. The first-person pose has already been set
+   * on `camera` (eye position + yaw/pitch); this moves it back/right/up along
+   * the camera's own axes, scaled by tpBlend so toggling slides smoothly.
+   * Collision: a ray from the head to the wanted spot against arena solids;
+   * the arm snaps in when blocked and eases back out when free.
+   */
+  private placeThirdPersonCamera(camera: THREE.PerspectiveCamera, dt: number, dying: boolean, shake: { x: number; y: number; z: number }) {
+    const p = this.player;
+    const b = this.tpBlend;
+    // Pivote = cabeza, suavizado (los escalones y el aterrizaje no sacuden la cámara).
+    const headY = dying ? 1.15 : this.eyeY - this.landDip;
+    _tpWant.set(p.pos.x, p.pos.y + headY, p.pos.z);
+    if (!this.tpPivotReady || this.tpPivot.distanceToSquared(_tpWant) > 9) {
+      this.tpPivot.copy(_tpWant);
+      this.tpPivotReady = true;
+      this.tpFrac = 1;
+    } else {
+      const kxz = 1 - Math.exp(-26 * dt);
+      const ky = 1 - Math.exp(-14 * dt);
+      this.tpPivot.x += (_tpWant.x - this.tpPivot.x) * kxz;
+      this.tpPivot.z += (_tpWant.z - this.tpPivot.z) * kxz;
+      this.tpPivot.y += (_tpWant.y - this.tpPivot.y) * ky;
+    }
+    if (dying) {
+      // Vista de la caída: algo más alta y mirando hacia el cuerpo.
+      _tpEuler.set(Math.min(-0.42, p.pitch), p.yaw, 0);
+      camera.quaternion.setFromEuler(_tpEuler);
+    }
+    const wantDist = this.input.aimHeld && !dying ? TP_DIST_AIM : TP_DIST;
+    this.tpDist += (wantDist - this.tpDist) * (1 - Math.exp(-10 * dt));
+    _tpBack.set(0, 0, 1).applyQuaternion(camera.quaternion);
+    _tpRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    // Brazo completo de la cámara (desde la cabeza).
+    _tpWant
+      .copy(_tpBack)
+      .multiplyScalar(this.tpDist * b)
+      .addScaledVector(_tpRight, TP_SIDE * b);
+    _tpWant.y += TP_UP * b;
+    const len = _tpWant.length();
+    let allowed = 1;
+    if (len > 0.01) {
+      _tpTmp.copy(_tpWant).multiplyScalar(1 / len);
+      const o = this.tpPivot;
+      const hit = raycastWorld(o.x, o.y, o.z, _tpTmp.x, _tpTmp.y, _tpTmp.z, len + TP_PAD, this.arena.solids, 0);
+      if (hit !== null) allowed = Math.max(0, (hit - TP_PAD) / len);
+      // Rozando una pared en paralelo el rayo central no basta: se acorta hasta que el punto quede libre.
+      for (let i = 0; i < 6 && allowed > 0.02; i++) {
+        const d = len * allowed;
+        if (!blockedAt(o.x + _tpTmp.x * d, o.y + _tpTmp.y * d - 0.12, o.z + _tpTmp.z * d, 0.12, 0.24, this.arena.solids)) break;
+        allowed *= 0.72;
+      }
+    }
+    // Entra de golpe (nunca atraviesa la pared), sale suave.
+    if (allowed < this.tpFrac) this.tpFrac = allowed;
+    else this.tpFrac += (allowed - this.tpFrac) * (1 - Math.exp(-5 * dt));
+    camera.position.copy(this.tpPivot).addScaledVector(_tpWant, this.tpFrac);
+    this.tpCam.copy(camera.position);
+    this.tpCamDist = len * this.tpFrac;
+    camera.position.x += shake.x;
+    camera.position.y += shake.y;
+    camera.position.z += shake.z;
+  }
+
+  /** Local player body for third person, animated with the bot rig (run / shoot / death). */
+  private syncSelfMesh(dt: number, now: number, dying: boolean) {
+    const mesh = this.selfMesh;
+    if (!mesh) return;
+    const p = this.player;
+    const show =
+      this.tpBlend > 0.25 &&
+      this.tpCamDist > TP_BODY_MIN &&
+      (this.screen === "playing" || this.screen === "paused") &&
+      (p.alive || (dying && this.crushT < 0));
+    mesh.visible = show;
+    if (!show) return;
+    mesh.position.copy(p.pos);
+    mesh.rotation.y = p.yaw;
+    setFighterWeapon(mesh, p.weapon);
+    animateFighter(mesh, {
+      speed: p.alive ? Math.hypot(p.vel.x, p.vel.z) : 0,
+      grounded: p.grounded,
+      velY: p.vel.y,
+      pitch: p.pitch,
+      dt,
+      firing: p.alive && now - p.lastShot < 0.12,
+      dead: !p.alive,
+      land: p.landT,
+      protect: now < p.protectUntil,
+    });
   }
 
   private emitHud() {

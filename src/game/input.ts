@@ -22,6 +22,7 @@ const GAME_CODES = new Set([
   "Digit5",
   "Digit6",
   "KeyV",
+  "KeyT",
   "KeyP",
   "KeyG",
   "KeyN",
@@ -54,6 +55,8 @@ export class GameInput {
   wheel = 0;
   slot: number | null = null;
   meleeToggle = false;
+  /** T: alternar primera / tercera persona. */
+  viewToggle = false;
   tabHeld = false;
   touchMoveX = 0;
   touchMoveY = 0;
@@ -76,6 +79,7 @@ export class GameInput {
       if (e.code === "Digit5") this.slot = 5;
       if (e.code === "Digit6") this.slot = 6;
       if (e.code === "KeyV") this.meleeToggle = true;
+      if (e.code === "KeyT" && !e.repeat) this.viewToggle = true;
       if (e.code === "KeyQ") this.prevWeapon = 1;
       if (e.code === "KeyE") this.nextWeapon = 1;
     };
@@ -225,6 +229,7 @@ export class GameInput {
     this.wheel = 0;
     this.slot = null;
     this.meleeToggle = false;
+    this.viewToggle = false;
     this.tabHeld = this.has("Tab");
   }
 }

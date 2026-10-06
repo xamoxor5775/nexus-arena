@@ -1,4 +1,4 @@
-import type { ArenaId, MatchMode, PowerId, RoundPrize, Settings, ShopItemId, SkinId, TouchActionId, TouchHand, WeaponId } from "./types";
+import type { ArenaId, MatchMode, PowerId, RoundPrize, Settings, ShopItemId, SkinId, TouchActionId, TouchHand, ViewMode, WeaponId } from "./types";
 
 export const STEP = 1 / 60;
 export const MAX_ACCUM = 0.25;
@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   touchHand: "right",
   touchOrder: ["jump", "weapon", "reload", "grenade", "aim"],
   quality: "auto",
+  viewMode: "first",
 };
 
 export const TOUCH_ACTIONS: { id: TouchActionId; label: string; short: string }[] = [
@@ -54,6 +55,15 @@ export const TOUCH_ACTIONS: { id: TouchActionId; label: string; short: string }[
 ];
 
 const TOUCH_IDS = new Set<TouchActionId>(TOUCH_ACTIONS.map((a) => a.id));
+
+export function normalizeViewMode(mode: string | undefined): ViewMode {
+  return mode === "third" ? "third" : "first";
+}
+
+export const VIEW_MODE_LABEL: Record<ViewMode, string> = {
+  first: "Primera persona",
+  third: "Tercera persona",
+};
 
 export function normalizeTouchHand(hand: string | undefined): TouchHand {
   return hand === "left" ? "left" : "right";

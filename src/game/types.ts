@@ -4,6 +4,8 @@ export type ShopItemId = WeaponId | PowerId;
 
 export type Screen = "menu" | "playing" | "paused" | "ended" | "settings" | "help" | "skin";
 export type SkinId = "cian" | "ambar" | "violeta" | "ascua" | "lima";
+/** Cámara del jugador: primera persona (FPS clásico) o tercera persona (sobre el hombro). */
+export type ViewMode = "first" | "third";
 export type RoundPrize = "torpedo" | "scatter" | "armor" | "rush";
 
 export type AABB = {
@@ -121,6 +123,8 @@ export type Settings = {
   touchOrder: TouchActionId[];
   /** Graphics preset. Auto holds ~60 FPS by scaling resolution and shadows. */
   quality: import("./graphics").QualityId;
+  /** Primera o tercera persona (tecla T / Ajustes / Pausa). */
+  viewMode: ViewMode;
 };
 
 export type HudSnapshot = {
