@@ -1,6 +1,7 @@
-import { defineEventHandler, getRequestIP, setCookie, setResponseStatus } from "h3";
+import { defineEventHandler, setCookie, setResponseStatus } from "h3";
 import { randomBytes } from "node:crypto";
 import { ACCESS_SESSION_COOKIE, accessSessionSigned, signAccessSession } from "../../../src/lib/access.server";
+import { clientIp } from "../../client-ip";
 import { makeLimiter } from "../../rate-limit";
 
 /**
@@ -13,7 +14,7 @@ const limited = makeLimiter(40, 10 * 60 * 1000);
 
 export default defineEventHandler((event) => {
   if (accessSessionSigned(event.req.headers)) return { access: true, guest: false };
-  if (limited(getRequestIP(event, { xForwardedFor: true }) || "local")) {
+  if (limited(clientIp(event))) {
     setResponseStatus(event, 429);
     return { access: false, error: "Demasiados intentos. Espera unos minutos." };
   }

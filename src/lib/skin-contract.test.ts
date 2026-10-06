@@ -47,3 +47,15 @@ test("products and prices come from one config", () => {
 test("owned skins = union of paid orders, unknown ids dropped", () => {
   assert.deepEqual(mergeOwnedSkins([{ skins: "pulse-ar-h470" }, { skins: "pulse-ar-h470,bate-metal-bat" }, { skins: "hack-skin" }, { skins: null }]), ["bate-metal-bat", "pulse-ar-h470"]);
 });
+
+test("Flow email check: '+' and odd characters are rejected with a clear message, normal emails pass", async () => {
+  const { FLOW_EMAIL_CHARS_ERROR, FLOW_EMAIL_PLUS_ERROR, flowEmailError } = await import("./skin-store.ts");
+  assert.equal(flowEmailError("nombre+skins@gmail.com"), FLOW_EMAIL_PLUS_ERROR);
+  assert.match(FLOW_EMAIL_PLUS_ERROR, /Flow no acepta correos con '\+'/);
+  assert.equal(flowEmailError("nombre@gmail.com"), null);
+  assert.equal(flowEmailError("nombre.apellido_2-x@mi-dominio.cl"), null);
+  assert.equal(flowEmailError("NOMBRE@Gmail.COM"), null);
+  assert.equal(flowEmailError("nombre!@gmail.com"), FLOW_EMAIL_CHARS_ERROR);
+  assert.equal(flowEmailError("ñandú@gmail.com"), FLOW_EMAIL_CHARS_ERROR);
+  assert.equal(flowEmailError("nombre@gmail"), FLOW_EMAIL_CHARS_ERROR);
+});

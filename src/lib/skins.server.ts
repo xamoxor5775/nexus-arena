@@ -12,7 +12,7 @@ import {
   redact,
 } from "./flow.server";
 import { flowAmountMatches, isOrderId } from "./flow-contract";
-import { skinProduct } from "./skin-store";
+import { flowEmailError, skinProduct } from "./skin-store";
 import { mergeOwnedSkins, restoreCodeFor, restoreCodeMatches } from "./skin-contract";
 
 /**
@@ -37,6 +37,8 @@ type SkinOrder = { id: string; email: string; amount_clp: number; status: string
 export async function createSkinPayment(productId: string, name: string, email: string): Promise<{ url: string; order: string }> {
   const product = skinProduct(productId);
   if (!product) throw new FlowCheckoutError("Ese diseño no está a la venta.", 400);
+  const flowEmail = flowEmailError(email);
+  if (flowEmail) throw new FlowCheckoutError(flowEmail, 400);
   if (!await emailDomainCanReceive(email)) {
     throw new FlowCheckoutError("Flow rechazó el correo. Usa uno que pueda recibir correo, por ejemplo nombre@gmail.com.", 400);
   }

@@ -1,13 +1,14 @@
-import { defineEventHandler, getRequestIP, readBody, setResponseStatus } from "h3";
+import { defineEventHandler, readBody, setResponseStatus } from "h3";
 import { ownedSkinsWithProof } from "../../../src/lib/skins.server";
 import { EMAIL_RE } from "../../../src/lib/skin-store";
+import { clientIp } from "../../client-ip";
 import { makeLimiter } from "../../rate-limit";
 
 // Called on every game load by buyers (cheap) and by "Restaurar compras" (brute-force target): 30 / 10 min / IP.
 const limited = makeLimiter(30, 10 * 60 * 1000);
 
 export default defineEventHandler(async (event) => {
-  if (limited(getRequestIP(event, { xForwardedFor: true }) || "local")) {
+  if (limited(clientIp(event))) {
     setResponseStatus(event, 429);
     return { ok: false, error: "Demasiados intentos. Espera unos minutos." };
   }
