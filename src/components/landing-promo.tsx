@@ -139,7 +139,7 @@ function WeaponCard({ id }: { id: WeaponId }) {
   const kind = melee ? "CUERPO A CUERPO" : meta.kind === "projectile" ? "PROYECTIL" : "IMPACTO DIRECTO";
   return (
     <article className="promo-weapon" style={{ ["--weapon" as string]: hex(meta.color) }}>
-      <img src={`/media/promo/arma-${id}.webp`} alt="" width={64} height={64} loading="lazy" decoding="async" />
+      <img src={`/media/promo/arma-${id}.webp?v=2`} alt="" width={64} height={64} loading="lazy" decoding="async" />
       <div className="promo-weapon-body">
         <span className="promo-weapon-kind">{kind}</span>
         <h3>{meta.label}</h3>
