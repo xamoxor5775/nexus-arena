@@ -4,6 +4,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { debugSpool } from "@/lib/debug-spool";
 import { bootGoogleAds } from "@/lib/google-ads";
+import { isCountablePath } from "@/lib/page-visits";
 import appCss from "../styles.css?url";
 import landingCss from "../landing.css?url";
 
@@ -50,10 +51,22 @@ export const Route = createRootRoute({
   component: RootShell,
 });
 
+/** Visit counter: one beacon per public page load (SPA navigations do not remount the root). */
+function sendVisitBeacon() {
+  try {
+    const path = window.location.pathname;
+    if (!isCountablePath(path)) return;
+    void fetch("/api/visita", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }), keepalive: true }).catch(() => undefined);
+  } catch {
+    // never break the page for a counter
+  }
+}
+
 function RootShell() {
   useEffect(() => {
     debugSpool.install();
     void bootGoogleAds();
+    sendVisitBeacon();
   }, []);
   return (
     <html lang="es-CL" suppressHydrationWarning>
