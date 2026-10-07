@@ -35,7 +35,9 @@ export function NexusApp({ demo }: { demo?: { onExit: () => void } } = {}) {
   const settings = useArena((s) => s.settings);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
-  const hud = useArena((s) => s.hud);
+  // Only the pointer-lock flag is needed here: subscribing to the whole HUD re-rendered the entire
+  // app (menu included) on every HUD tick (20 Hz).
+  const hudLocked = useArena((s) => s.hud.locked);
   const isTouch = useArena((s) => s.isTouch);
   const showBoard = useArena((s) => s.showBoard);
   const [networkState, setNetworkState] = useState("CONECTANDO");
@@ -374,7 +376,7 @@ export function NexusApp({ demo }: { demo?: { onExit: () => void } } = {}) {
       {screen === "paused" && <PauseLayer />}
       {screen === "ended" && <EndLayer onPlay={play} />}
 
-      {screen === "playing" && !hud.locked && !isTouch && (
+      {screen === "playing" && !hudLocked && !isTouch && (
         <button
           type="button"
           className="nx-plate nx-ink nx-kicker absolute inset-x-0 bottom-8 z-20 mx-auto w-max px-6 py-3"
@@ -443,9 +445,10 @@ function MenuLayer({
   const luna = settings.arena === "luna";
   const maze = settings.arena === "laberinto";
   const mar = settings.arena === "mar";
+  const reactor = settings.arena === "reactor";
   const ctf = settings.mode === "ctf";
   const dm = settings.mode !== "ctf";
-  const arenaName = mar ? "Mar y cielo" : maze ? "Laberinto" : luna ? "Luna" : cumbre ? "Cumbre" : lave ? "LAVE" : "Pozo";
+  const arenaName = reactor ? "Reactor" : mar ? "Mar y cielo" : maze ? "Laberinto" : luna ? "Luna" : cumbre ? "Cumbre" : lave ? "LAVE" : "Pozo";
   const career = readCareer();
   const selectedUnlock = arenaUnlockStatus(settings.arena, career);
   const pickArena = (arena: ArenaId) => {
@@ -472,6 +475,8 @@ function MenuLayer({
                 ? "Maqueta Luna. Ion en la superficie, Ascua en el núcleo. Roba la bandera enemiga y vuelve a la tuya."
                 : settings.mode === "duel"
                   ? `Duelo en ${arenaName}. Un rival, ocho frags.`
+                    : reactor
+                      ? "Reactor octogonal: anillo, rampas, puentes de cristal y dos pads de salto sobre el pozo de refrigerante. La mega está junto al anillo este."
                     : mar
                       ? "Plataforma abierta sobre el océano. Salta entre las islas y usa los impulsores para cruzar el mar."
                     : maze
@@ -490,7 +495,7 @@ function MenuLayer({
             <p className="nx-statcard-live">
               <i />
               <span className="leading-snug">
-                {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
+                {networkState} · {networkPlayers} {networkPlayers === 1 ? "jugador" : "jugadores"} en {reactor ? "el reactor" : mar ? "Mar y cielo" : maze ? "el laberinto" : luna ? "la luna" : lave ? "LAVE" : cumbre ? "la cumbre" : "el pozo"}
                 {devRoom ? <span className="whitespace-nowrap opacity-60"> · sala 1 · dev</span> : roomNumber > 1 && <span className="whitespace-nowrap opacity-60"> · sala {roomNumber}</span>}
               </span>
             </p>
@@ -503,7 +508,7 @@ function MenuLayer({
               </li>
               <li>
                 <span>Mapa</span>
-                <b>{mar ? "Mar y cielo · archipiélago" : maze ? "Laberinto · 4 pisos" : luna ? "Luna · maqueta" : lave ? "LAVE · 96 m" : cumbre ? "Cumbre" : "Pozo · 88 m"}</b>
+                <b>{reactor ? "Reactor · 80 m" : mar ? "Mar y cielo · archipiélago" : maze ? "Laberinto · 4 pisos" : luna ? "Luna · maqueta" : lave ? "LAVE · 96 m" : cumbre ? "Cumbre" : "Pozo · 88 m"}</b>
               </li>
               <li>
                 <span>{ctf ? "Capturas" : "Frag límite"}</span>
@@ -520,7 +525,7 @@ function MenuLayer({
             </ul>
             <div className="nx-statcard-plan">
               <Schematic className="h-12 w-full" />
-              <span>{mar ? "Plano de las plataformas marinas" : maze ? "Plano de la luna hueca" : luna ? "Plano de la luna" : lave ? "Plano inclinado de LAVE" : cumbre ? "Plano de la cumbre" : "Plano del pozo"}</span>
+              <span>{reactor ? "Plano del reactor" : mar ? "Plano de las plataformas marinas" : maze ? "Plano de la luna hueca" : luna ? "Plano de la luna" : lave ? "Plano inclinado de LAVE" : cumbre ? "Plano de la cumbre" : "Plano del pozo"}</span>
             </div>
           </aside>
         </header>
@@ -696,6 +701,7 @@ const ARENA_CARDS: Array<{ id: ArenaId; title: string; line: string; art: string
   { id: "luna", title: "Luna", line: "Superficie y núcleo", art: "/textures/previews/arena-luna-preview-v1.webp", rail: "#d7ecff" },
   { id: "laberinto", title: "Laberinto", line: "Cuatro pisos, gravedad baja", art: "/textures/previews/arena-laberinto-preview-v1.webp", rail: "#7af0ff" },
   { id: "mar", title: "Mar y cielo", line: "Plataforma sobre el océano", art: "/textures/previews/arena-mar-preview-v1.webp", rail: "#9fd4ff" },
+  { id: "reactor", title: "Reactor", line: "Anillo octogonal, puentes y pozo", art: "/textures/previews/arena-reactor-preview-v1.webp", rail: "#ff5a3a" },
 ];
 
 const ARENA_UNLOCKS: Record<ArenaId, { level: number; wins: number; record: number }> = {
@@ -705,13 +711,14 @@ const ARENA_UNLOCKS: Record<ArenaId, { level: number; wins: number; record: numb
   luna: { level: 6, wins: 30, record: 30 },
   laberinto: { level: 8, wins: 40, record: 40 },
   mar: { level: 10, wins: 50, record: 50 },
+  reactor: { level: 1, wins: 0, record: 0 },
 };
 
 function arenaUnlockStatus(id: ArenaId, career: CareerSnapshot) {
   const req = ARENA_UNLOCKS[id];
   const open = career.level >= req.level || career.wins >= req.wins || career.best >= req.record;
   const hint =
-    id === "pozo"
+    id === "pozo" || id === "reactor"
       ? "Disponible"
       : `Nivel ${req.level} · ${req.wins} victorias · récord ${req.record}`;
   return { open, hint };

@@ -24,6 +24,10 @@ export type ArenaData = {
   water?: WaterZone[];
   update?: (now: number, dt: number) => void;
   startCycle?: (epochMs: number) => void;
+  /** Bots check the ground ahead before walking (arenas with open pits, e.g. Reactor). */
+  botLedgeGuard?: boolean;
+  /** Menu camera orbit override (radius, camera height, look-at height). */
+  menuOrbit?: { radius: number; height: number; lookY: number };
   dispose: () => void;
 };
 

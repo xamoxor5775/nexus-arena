@@ -7,6 +7,7 @@ import { buildLaberinto } from "./laberinto";
 import { buildMoon } from "./moon";
 import { buildSummit } from "./summit";
 import { buildMar } from "./mar";
+import { buildReactorArena } from "./reactor-arena";
 import { preloadPozoSkyMoon } from "./pozoSkyMoon";
 import { preloadPozoCatacombActors } from "./pozoCatacombActors";
 import {
@@ -212,6 +213,8 @@ export type EngineHooks = {
 const REMOTE_PREFIX = "remote:";
 const peerIdOf = (f: Fighter) => f.peerId;
 const _netDir = new THREE.Vector3();
+/** Redraw interval of the (hidden) arena behind the opaque menu panel. */
+const MENU_COVERED_FRAME_S = 0.25;
 
 export class NexusArena {
   input = new GameInput();
@@ -251,6 +254,9 @@ export class NexusArena {
   private entryHitchMs = 0;
   private entryReleased = false;
   private worldPrimed = false;
+  /** Menu screens cover the canvas with an opaque panel: the world is redrawn only a few times per second. */
+  private coveredAcc = 0;
+  private wasCovered = false;
   private primeFrames = 0;
   private matchOn = false;
   private orbitT = 0.8;
@@ -515,13 +521,15 @@ export class NexusArena {
 
   private ensureArena(id: ArenaId) {
     const next: ArenaId =
-      id === "mar" || id === "cumbre" || id === "lave" || id === "luna" || id === "laberinto" ? id : "pozo";
+      id === "mar" || id === "cumbre" || id === "lave" || id === "luna" || id === "laberinto" || id === "reactor" ? id : "pozo";
     if (this.arenaId === next) return;
     this.clearItems();
     this.clearFlags();
     this.arena.dispose();
     this.arena =
-      next === "mar"
+      next === "reactor"
+        ? buildReactorArena(this.view.scene, this.view.renderer)
+        : next === "mar"
         ? buildMar(this.view.scene, this.view.renderer)
         : next === "cumbre"
         ? buildSummit(this.view.scene, this.view.renderer)
@@ -1164,17 +1172,36 @@ export class NexusArena {
         debugSpool.error("engine.fixed", err, { n: this.frameFails });
       }
     }
-    try {
-      this.visuals(dt, now);
-    } catch (err) {
-      if (this.frameFails < 8) {
-        this.frameFails += 1;
-        debugSpool.error("engine.visuals", err, { n: this.frameFails });
+    // Menu/Ajustes/Ayuda/Arsenal draw an opaque full-screen panel over the canvas, so rendering the
+    // orbiting arena at full rate only burned GPU/CPU (menu lag, fans, slow UI on weak GPUs).
+    // Keep the scene warm at ~4 fps there; the dynamic-resolution controller is not fed those frames.
+    const covered = this.worldPrimed && this.menuCovered();
+    let drawWorld = true;
+    if (covered) {
+      this.coveredAcc += dt;
+      drawWorld = this.coveredAcc >= MENU_COVERED_FRAME_S;
+      if (drawWorld) this.coveredAcc = 0;
+      this.wasCovered = true;
+    } else if (this.wasCovered) {
+      this.wasCovered = false;
+      this.coveredAcc = 0;
+      this.view.resetFrameClock();
+    }
+    if (drawWorld) {
+      try {
+        this.visuals(covered ? MENU_COVERED_FRAME_S : dt, now);
+      } catch (err) {
+        if (this.frameFails < 8) {
+          this.frameFails += 1;
+          debugSpool.error("engine.visuals", err, { n: this.frameFails });
+        }
       }
     }
     try {
-      this.view.render(this.screen === "playing" && this.player.alive && this.tpBlend < 0.3);
-      this.view.noteFrame(dt);
+      if (drawWorld) {
+        this.view.render(this.screen === "playing" && this.player.alive && this.tpBlend < 0.3);
+        if (!covered) this.view.noteFrame(dt);
+      }
     } catch (err) {
       if (this.frameFails < 8) {
         this.frameFails += 1;
@@ -1193,6 +1220,10 @@ export class NexusArena {
     }
     this.input.endFrame();
   };
+
+  private menuCovered() {
+    return this.screen === "menu" || this.screen === "settings" || this.screen === "help" || this.screen === "skin";
+  }
 
   /** Paint the player view once so the arena is on screen before 3-2-1 is visible. */
   private warmPlayerView() {
@@ -1279,7 +1310,10 @@ export class NexusArena {
     }
 
     for (const f of this.fighters) {
-      if (!f.isPlayer && !f.isRemote) this.thinkBot(f, now, dt);
+      if (!f.isPlayer && !f.isRemote) {
+        this.thinkBot(f, now, dt);
+        if (this.arena.botLedgeGuard) this.guardLedge(f);
+      }
       if (!f.alive) {
         if (f.isPlayer && this.crushT >= 0) {
           this.crushT += dt;
@@ -2635,6 +2669,42 @@ export class NexusArena {
     }
   }
 
+  /** True when there is floor (solid top or jump pad) under (x, z) near height y. */
+  private groundUnder(x: number, z: number, y: number) {
+    for (const s of this.arena.solids) {
+      if (x < s.minX || x > s.maxX || z < s.minZ || z > s.maxZ) continue;
+      if (s.maxY <= y + 0.6 && s.maxY >= y - 2.4) return true;
+    }
+    for (const p of this.arena.pads) {
+      if (x >= p.aabb.minX && x <= p.aabb.maxX && z >= p.aabb.minZ && z <= p.aabb.maxZ) return true;
+    }
+    return false;
+  }
+
+  /** Keeps grounded bots from walking off ledges into pits (Reactor coolant pit). */
+  private guardLedge(f: Fighter) {
+    if (!f.alive || !f.grounded || (f.wishX === 0 && f.wishY === 0)) return;
+    const fx = -Math.sin(f.yaw), fz = -Math.cos(f.yaw);
+    const rx = Math.cos(f.yaw), rz = -Math.sin(f.yaw);
+    const ahead = 1.15;
+    const safe = (dx: number, dz: number) => {
+      const len = Math.hypot(dx, dz);
+      return len < 1e-4 || this.groundUnder(f.pos.x + (dx / len) * ahead, f.pos.z + (dz / len) * ahead, f.pos.y);
+    };
+    if (safe(fx * f.wishY + rx * f.wishX, fz * f.wishY + rz * f.wishX)) return;
+    const fwdOk = f.wishY === 0 || safe(fx * f.wishY, fz * f.wishY);
+    const sideOk = f.wishX === 0 || safe(rx * f.wishX, rz * f.wishX);
+    if (!fwdOk) f.wishY = 0;
+    if (!sideOk) {
+      f.strafe = -f.strafe;
+      f.wishX = 0;
+    }
+    if (!fwdOk && !sideOk) {
+      f.wishJump = false;
+      f.wp = (f.wp + 1 + Math.floor(Math.random() * 5)) % Math.max(1, this.arena.waypoints.length);
+    }
+  }
+
   private thinkBot(f: Fighter, now: number, _dt: number) {
     if (!f.alive) {
       f.wishX = 0;
@@ -3154,9 +3224,10 @@ export class NexusArena {
       const luna = this.arenaId === "luna";
       const maze = this.arenaId === "laberinto";
       const mar = this.arenaId === "mar";
-      const r = maze ? 62 : luna ? 56 : mar ? 48 : 70;
-      camera.position.set(Math.sin(this.orbitT) * r, maze ? 28 : luna ? 26 : mar ? 20 : 24, Math.cos(this.orbitT) * r);
-      camera.lookAt(0, maze ? 10 : luna ? 6 : mar ? 1 : 2.2, 0);
+      const orbit = this.arena.menuOrbit;
+      const r = orbit?.radius ?? (maze ? 62 : luna ? 56 : mar ? 48 : 70);
+      camera.position.set(Math.sin(this.orbitT) * r, orbit?.height ?? (maze ? 28 : luna ? 26 : mar ? 20 : 24), Math.cos(this.orbitT) * r);
+      camera.lookAt(0, orbit?.lookY ?? (maze ? 10 : luna ? 6 : mar ? 1 : 2.2), 0);
       return;
     }
 

@@ -83,14 +83,14 @@ export function normalizeTouchOrder(raw: unknown): TouchActionId[] {
 }
 
 /** Every playable arena id (all of them support deathmatch). */
-export const ARENA_IDS: readonly ArenaId[] = ["pozo", "cumbre", "lave", "luna", "laberinto", "mar"];
+export const ARENA_IDS: readonly ArenaId[] = ["pozo", "cumbre", "lave", "luna", "laberinto", "mar", "reactor"];
 
 export function isArenaId(id: unknown): id is ArenaId {
   return typeof id === "string" && (ARENA_IDS as readonly string[]).includes(id);
 }
 
 export function normalizeArena(id: string | undefined): ArenaId {
-  if (id === "mar") return id;
+  if (id === "mar" || id === "reactor") return id;
   if (id === "cumbre" || id === "lave" || id === "luna" || id === "laberinto") return id;
   return "pozo";
 }

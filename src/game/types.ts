@@ -94,7 +94,7 @@ export type ScoreRow = {
   team?: TeamId;
 };
 
-export type ArenaId = "pozo" | "cumbre" | "lave" | "luna" | "laberinto" | "mar";
+export type ArenaId = "pozo" | "cumbre" | "lave" | "luna" | "laberinto" | "mar" | "reactor";
 export type MatchMode = "dm" | "ctf" | "duel";
 
 export type FlagHud = {
