@@ -19,6 +19,8 @@ export type ArenaRenderer = {
   resize: () => void;
   render: (drawGun: boolean) => void;
   noteFrame: (dt: number) => void;
+  /** Forget the last frame timestamp (after frames that were intentionally not drawn). */
+  resetFrameClock: () => void;
   setWorldFov: (fov: number) => void;
   rebuildGuns: (accent: number) => void;
   setQuality: (id: QualityId) => void;
@@ -180,6 +182,10 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
     if (d.shadowChanged) setShadows(d.shadows);
   };
 
+  const resetFrameClock = () => {
+    lastFrameAt = 0;
+  };
+
   const applyQuality = () => {
     setTextureAnisotropy(preset.anisotropy);
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
@@ -235,5 +241,5 @@ export function createArenaRenderer(canvas: HTMLCanvasElement, fov: number, acce
 
   resize();
   applyQuality();
-  return { renderer, scene, gunScene, camera, gunCam, gunRoot, guns, resize, render, noteFrame, setWorldFov, rebuildGuns, setQuality, applyQuality, qualityState, dispose };
+  return { renderer, scene, gunScene, camera, gunCam, gunRoot, guns, resize, render, noteFrame, resetFrameClock, setWorldFov, rebuildGuns, setQuality, applyQuality, qualityState, dispose };
 }

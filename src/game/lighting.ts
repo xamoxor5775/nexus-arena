@@ -176,7 +176,9 @@ export function createArenaLights(
   for (let i = 0; i < 3; i++) {
     const L = new THREE.PointLight(0xffaa66, 0, 22, 1.7);
     L.castShadow = false;
-    L.visible = false;
+    // Always "visible" with intensity 0 when idle: toggling light.visible changes the scene's
+    // point-light count, which makes three.js rebuild the shader program of every lit material
+    // (a hitch on every shot / pickup flash and when the match returns to the menu).
     scene.add(L);
     flashes.push(L);
   }
@@ -289,7 +291,6 @@ export function createArenaLights(
     L.position.set(x, y + 0.25, z);
     L.intensity = peak;
     L.distance = 8 + peak * 0.7;
-    L.visible = true;
     flashT[i] = 0.16;
     flashPeak[i] = peak;
     flashDur[i] = peak > 18 ? 0.28 : 0.16;
@@ -319,10 +320,8 @@ export function createArenaLights(
       const L = flashes[i]!;
       if (flashT[i]! > 0) {
         L.intensity = flashPeak[i]! * (flashT[i]! / flashDur[i]!);
-        L.visible = true;
       } else {
         L.intensity = 0;
-        L.visible = false;
       }
     }
     if (sea) {
