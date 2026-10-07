@@ -1,6 +1,6 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { SIGNAL_CAP_PER_PEER, addSignal, leaveRoom, pollRoom, suggestRoom } from "./rtc.server.ts";
+import { SIGNAL_CAP_PER_PEER, addSignal, leaveRoom, peerIsLive, pollRoom, suggestRoom } from "./rtc.server.ts";
 
 const rooms = () => (globalThis as { __nexusRtcRooms__?: Map<string, unknown> }).__nexusRtcRooms__!;
 
@@ -99,6 +99,17 @@ describe("rtc signaling rooms", () => {
     for (let i = 0; i < SIGNAL_CAP_PER_PEER + 20; i++) addSignal("nexus-laberinto-dm", "p1", "p0", "ice", i);
     assert.equal(join("nexus-laberinto-dm", "p0").signals.length, SIGNAL_CAP_PER_PEER);
     assert.equal(join("nexus-laberinto-dm", "p7").signals.length, 7 * 11);
+  });
+
+  it("peerIsLive detects a fresh join without mutating the room", () => {
+    assert.equal(peerIsLive("nexus-pozo-dm", "a"), false);
+    assert.equal(rooms().has("nexus-pozo-dm"), false);
+    join("nexus-pozo-dm", "a");
+    assert.equal(peerIsLive("nexus-pozo-dm", "a"), true);
+    assert.equal(peerIsLive("nexus-arena-public-v1", "a"), true); // legacy alias, same room
+    assert.equal(peerIsLive("nexus-pozo-dm", "a", undefined, Date.now() + 60_000), false); // expired
+    leaveRoom("nexus-pozo-dm", "a");
+    assert.equal(peerIsLive("nexus-pozo-dm", "a"), false);
   });
 
   it("rejects non-public rooms", () => {

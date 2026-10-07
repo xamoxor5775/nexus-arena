@@ -129,6 +129,16 @@ export function pollRoom(roomName: string, peerId: string, name: string, since: 
   };
 }
 
+/**
+ * Whether `peerId` is currently a live member of the room (read-only). /api/rtc calls it
+ * before pollRoom to detect a fresh join for the arena-join counter.
+ */
+export function peerIsLive(roomName: string, peerId: string, access?: RoomAccess, now = Date.now()): boolean {
+  const roomId = roomKey(roomName, access);
+  const peer = roomId ? rooms.get(roomId)?.peers.get(peerId) : undefined;
+  return Boolean(peer && now - peer.lastSeen <= PEER_TTL_MS);
+}
+
 export function addSignal(roomName: string, from: string, to: string, kind: RtcSignal["kind"], payload: unknown, access?: RoomAccess) {
   const roomId = roomKey(roomName, access);
   if (!roomId) return;
