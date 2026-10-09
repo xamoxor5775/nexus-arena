@@ -160,7 +160,7 @@ export function createArenaLights(
     fogColor.setHex(0x2e100c).lerp(_c2.setHex(0x5a2214), 0.22 + 0.28 * breathe);
     bg.copy(fogColor).multiplyScalar(0.72);
 
-    mats.floor.emissiveIntensity = 0.28 + 0.18 * pulse;
+    mats.floor.emissiveIntensity = 0.06 + 0.04 * pulse;
     mats.console.emissiveIntensity = 0.24 + 0.18 * pulse;
     mats.rune.emissiveIntensity = 0.7 + 0.45 * (0.5 + 0.5 * Math.sin(now * 2.4));
     mats.ruin.emissiveIntensity = 0.1 + 0.1 * flicker;

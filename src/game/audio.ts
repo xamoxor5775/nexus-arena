@@ -7,6 +7,11 @@ export class ArenaAudio {
   muted = false;
   private drone: OscillatorNode | null = null;
   private drone2: OscillatorNode | null = null;
+  private theme: AudioBufferSourceNode | null = null;
+  private themeBuf: AudioBuffer | null = null;
+  private themeLoading: Promise<AudioBuffer | null> | null = null;
+  private themeWanted = false;
+  private themeGen = 0;
 
   unlock() {
     if (!this.ctx) {
@@ -191,6 +196,48 @@ export class ArenaAudio {
     }
     this.drone = null;
     this.drone2 = null;
+  }
+
+  startTheme() {
+    this.unlock();
+    this.themeWanted = true;
+    const gen = ++this.themeGen;
+    void this.ensureTheme(gen);
+  }
+
+  stopTheme() {
+    this.themeWanted = false;
+    this.themeGen += 1;
+    try {
+      this.theme?.stop();
+    } catch {
+      /* already stopped */
+    }
+    this.theme = null;
+  }
+
+  private async ensureTheme(gen: number) {
+    if (!this.ctx || !this.music || this.theme) return;
+    if (!this.themeBuf) {
+      this.themeLoading ??= fetch("/audio/fuego-estelar.mp3")
+        .then((res) => {
+          if (!res.ok) throw new Error(String(res.status));
+          return res.arrayBuffer();
+        })
+        .then((buf) => this.ctx!.decodeAudioData(buf))
+        .catch(() => null);
+      this.themeBuf = await this.themeLoading;
+    }
+    if (gen !== this.themeGen || !this.themeWanted || !this.themeBuf || this.theme || !this.ctx || !this.music) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.themeBuf;
+    src.loop = true;
+    const g = this.ctx.createGain();
+    g.gain.value = 0.9;
+    src.connect(g);
+    g.connect(this.music);
+    src.start();
+    this.theme = src;
   }
 
   private burst(duration: number, peak: number, cutoff: number) {

@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { ArenaAudio } from "./audio";
 import { buildArena, makeItemMesh, type ArenaData } from "./arena";
+import { buildReactorArena } from "./reactor-arena";
+import type { ArenaId } from "./store";
 import { blockedAt, bodyBox, depenetrate, moveBody, overlaps, rayAABB, raycastWorld } from "./collision";
 import {
   AIR_ACCEL,
@@ -185,7 +187,7 @@ export class NexusArena {
     16,
   );
 
-  constructor(canvas: HTMLCanvasElement, settings: Settings, hooks: EngineHooks) {
+  constructor(canvas: HTMLCanvasElement, settings: Settings, hooks: EngineHooks, mapId: ArenaId = "crucible") {
     this.canvas = canvas;
     this.settings = { ...settings };
     this.hooks = hooks;
@@ -208,7 +210,7 @@ export class NexusArena {
     this.gunCam = new THREE.PerspectiveCamera(42, 1, 0.04, 8);
     this.gunCam.layers.set(1);
 
-    this.arena = buildArena(this.scene);
+    this.arena = mapId === "reactor" ? buildReactorArena(this.scene) : buildArena(this.scene);
     this.scene.add(this.fx.mesh);
     this.scene.add(this.rockets.mesh, this.ions.mesh);
     this.scene.add(this.beamBatch.mesh);
@@ -277,7 +279,8 @@ export class NexusArena {
 
     document.addEventListener("pointerlockchange", this.onLock);
     this.bindControlsTest();
-    this.audio.startDrone();
+    if (mapId === "reactor") this.audio.startTheme();
+    else this.audio.startDrone();
     this.setBotsVisible(this.settings.bots);
     this.emitHud();
   }
@@ -298,6 +301,7 @@ export class NexusArena {
     window.removeEventListener("resize", this.resize);
     document.removeEventListener("pointerlockchange", this.onLock);
     this.audio.stopDrone();
+    this.audio.stopTheme();
     this.arena.dispose();
     this.fx.dispose();
     this.rockets.dispose();
@@ -1404,7 +1408,7 @@ export class NexusArena {
 
     if (this.screen === "menu" || this.screen === "settings" || this.screen === "help" || this.screen === "ended") {
       this.orbitT += dt * 0.12;
-      const r = 70;
+      const r = this.arena.menuRadius ?? 70;
       this.camera.position.set(Math.sin(this.orbitT) * r, 24, Math.cos(this.orbitT) * r);
       this.camera.lookAt(0, 2.2, 0);
       return;
