@@ -279,7 +279,8 @@ export class NexusArena {
 
     document.addEventListener("pointerlockchange", this.onLock);
     this.bindControlsTest();
-    this.audio.startDrone();
+    if (mapId === "reactor") this.audio.startTheme();
+    else this.audio.startDrone();
     this.setBotsVisible(this.settings.bots);
     this.emitHud();
   }
@@ -300,6 +301,7 @@ export class NexusArena {
     window.removeEventListener("resize", this.resize);
     document.removeEventListener("pointerlockchange", this.onLock);
     this.audio.stopDrone();
+    this.audio.stopTheme();
     this.arena.dispose();
     this.fx.dispose();
     this.rockets.dispose();

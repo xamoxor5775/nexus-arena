@@ -5,6 +5,8 @@ export class ArenaAudio {
   music: GainNode | null = null;
   volume = 0.72;
   muted = false;
+  private drone: OscillatorNode | null = null;
+  private drone2: OscillatorNode | null = null;
   private theme: AudioBufferSourceNode | null = null;
   private themeBuf: AudioBuffer | null = null;
   private themeLoading: Promise<AudioBuffer | null> | null = null;
@@ -163,12 +165,47 @@ export class ArenaAudio {
 
   startDrone() {
     this.unlock();
+    if (!this.ctx || !this.music || this.drone) return;
+    const o1 = this.ctx.createOscillator();
+    const o2 = this.ctx.createOscillator();
+    const f = this.ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = 420;
+    o1.type = "sawtooth";
+    o2.type = "triangle";
+    o1.frequency.value = 55;
+    o2.frequency.value = 82.4;
+    const g = this.ctx.createGain();
+    g.gain.value = 0.35;
+    o1.connect(f);
+    o2.connect(f);
+    f.connect(g);
+    g.connect(this.music);
+    o1.start();
+    o2.start();
+    this.drone = o1;
+    this.drone2 = o2;
+  }
+
+  stopDrone() {
+    try {
+      this.drone?.stop();
+      this.drone2?.stop();
+    } catch {
+      /* already stopped */
+    }
+    this.drone = null;
+    this.drone2 = null;
+  }
+
+  startTheme() {
+    this.unlock();
     this.themeWanted = true;
     const gen = ++this.themeGen;
     void this.ensureTheme(gen);
   }
 
-  stopDrone() {
+  stopTheme() {
     this.themeWanted = false;
     this.themeGen += 1;
     try {
