@@ -5,8 +5,11 @@ export class ArenaAudio {
   music: GainNode | null = null;
   volume = 0.72;
   muted = false;
-  private drone: OscillatorNode | null = null;
-  private drone2: OscillatorNode | null = null;
+  private theme: AudioBufferSourceNode | null = null;
+  private themeBuf: AudioBuffer | null = null;
+  private themeLoading: Promise<AudioBuffer | null> | null = null;
+  private themeWanted = false;
+  private themeGen = 0;
 
   unlock() {
     if (!this.ctx) {
@@ -160,37 +163,44 @@ export class ArenaAudio {
 
   startDrone() {
     this.unlock();
-    if (!this.ctx || !this.music || this.drone) return;
-    const o1 = this.ctx.createOscillator();
-    const o2 = this.ctx.createOscillator();
-    const f = this.ctx.createBiquadFilter();
-    f.type = "lowpass";
-    f.frequency.value = 420;
-    o1.type = "sawtooth";
-    o2.type = "triangle";
-    o1.frequency.value = 55;
-    o2.frequency.value = 82.4;
-    const g = this.ctx.createGain();
-    g.gain.value = 0.35;
-    o1.connect(f);
-    o2.connect(f);
-    f.connect(g);
-    g.connect(this.music);
-    o1.start();
-    o2.start();
-    this.drone = o1;
-    this.drone2 = o2;
+    this.themeWanted = true;
+    const gen = ++this.themeGen;
+    void this.ensureTheme(gen);
   }
 
   stopDrone() {
+    this.themeWanted = false;
+    this.themeGen += 1;
     try {
-      this.drone?.stop();
-      this.drone2?.stop();
+      this.theme?.stop();
     } catch {
       /* already stopped */
     }
-    this.drone = null;
-    this.drone2 = null;
+    this.theme = null;
+  }
+
+  private async ensureTheme(gen: number) {
+    if (!this.ctx || !this.music || this.theme) return;
+    if (!this.themeBuf) {
+      this.themeLoading ??= fetch("/audio/fuego-estelar.mp3")
+        .then((res) => {
+          if (!res.ok) throw new Error(String(res.status));
+          return res.arrayBuffer();
+        })
+        .then((buf) => this.ctx!.decodeAudioData(buf))
+        .catch(() => null);
+      this.themeBuf = await this.themeLoading;
+    }
+    if (gen !== this.themeGen || !this.themeWanted || !this.themeBuf || this.theme || !this.ctx || !this.music) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.themeBuf;
+    src.loop = true;
+    const g = this.ctx.createGain();
+    g.gain.value = 0.9;
+    src.connect(g);
+    g.connect(this.music);
+    src.start();
+    this.theme = src;
   }
 
   private burst(duration: number, peak: number, cutoff: number) {
