@@ -43,6 +43,36 @@ export function loadArenaMaps() {
   };
 }
 
+/** Tile a box map in world meters so thin trims are not stretched across the face. */
+export function useWorldUv(mat: THREE.MeshStandardMaterial, tilesPerMeter: number) {
+  mat.map?.repeat.set(1, 1);
+  mat.emissiveMap?.repeat.set(1, 1);
+  const scale = tilesPerMeter.toFixed(4);
+  mat.customProgramCacheKey = () => `world-uv-${scale}`;
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+#ifdef USE_BATCHING
+#ifdef USE_MAP
+  {
+    vec3 texelPos = (batchingMatrix * vec4(transformed, 1.0)).xyz;
+    vec3 texelN = abs(mat3(batchingMatrix) * normal);
+    vec2 wu = texelPos.xz;
+    if (texelN.x > texelN.y && texelN.x > texelN.z) wu = texelPos.zy;
+    else if (texelN.z > texelN.y && texelN.z > texelN.x) wu = texelPos.xy;
+    wu *= ${scale};
+    vMapUv = (mapTransform * vec3(wu, 1.0)).xy;
+    #ifdef USE_EMISSIVEMAP
+      vEmissiveMapUv = (emissiveMapTransform * vec3(wu, 1.0)).xy;
+    #endif
+  }
+#endif
+#endif`,
+    );
+  };
+}
+
 export function loadSkyTex(url: string): THREE.Texture {
   const hit = texCache.get(url);
   if (hit) return hit;

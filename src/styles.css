@@ -116,7 +116,7 @@
         180deg,
         color-mix(in oklab, var(--color-fg) 10%, transparent),
         transparent 42%,
-        color-mix(in oklab, var(--color-bg) 22%, transparent)
+        color-mix(in oklab, var(--color-bg) 8%, transparent)
       ),
       url("/textures/plate.png");
     background-size: auto, 280px;
@@ -163,8 +163,8 @@
     background-image:
       linear-gradient(
         180deg,
-        color-mix(in oklab, var(--color-bg) 28%, transparent),
-        color-mix(in oklab, var(--color-bg) 46%, transparent)
+        color-mix(in oklab, var(--color-bg) 14%, transparent),
+        color-mix(in oklab, var(--color-bg) 28%, transparent)
       ),
       url("/textures/plate.png");
     background-blend-mode: normal, normal;

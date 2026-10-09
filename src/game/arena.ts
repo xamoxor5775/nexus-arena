@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { boxAt } from "./collision";
 import type { AABB, ItemPad, JumpPad, Spawn } from "./types";
 import { isPower, POWER_META } from "./constants";
-import { loadArenaMaps, loadSkyTex, padTexture } from "./textures";
+import { loadArenaMaps, loadSkyTex, padTexture, useWorldUv } from "./textures";
 import { createArenaLights, type ArenaLights } from "./lighting";
 import { BoxBatch, bakeMeshes, instanceCylinders, instancePlanes } from "./instancing";
 
@@ -103,9 +103,8 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     roughness: 0.62,
     metalness: 0.18,
     color: 0xffffff,
-    emissive: 0x2ee0c8,
-    emissiveMap: maps.floor,
-    emissiveIntensity: 0.22,
+    emissive: 0x143832,
+    emissiveIntensity: 0.08,
   });
   const plateMat = new THREE.MeshStandardMaterial({
     map: maps.plate,
@@ -193,6 +192,13 @@ export function buildArena(scene: THREE.Scene): ArenaData {
     metalness: 0.58,
     color: 0xffffff,
   });
+  useWorldUv(floorMat, 0.22);
+  useWorldUv(plateMat, 0.45);
+  useWorldUv(beamMat, 0.4);
+  useWorldUv(hazardMat, 1.15);
+  useWorldUv(consoleMat, 0.4);
+  useWorldUv(ruinMat, 0.38);
+  useWorldUv(armorMat, 0.42);
   mats.push(
     floorMat,
     plateMat,

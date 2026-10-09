@@ -120,13 +120,13 @@ function grain(x, y, size, seed, amount) {
   return (fbm(x, y, size, seed, 4, 8) - 0.5) * amount;
 }
 
-function panelShade(x, y, cell) {
+function panelShade(x, y, cell, grooveDepth = 28) {
   const lx = x % cell;
   const ly = y % cell;
   const edge = 3;
-  const groove = lx < edge || ly < edge ? -28 : 0;
-  const lip = (lx >= edge && lx < edge + 2) || (ly >= edge && ly < edge + 2) ? 16 : 0;
-  const inset = lx > cell - 6 || ly > cell - 6 ? -10 : 0;
+  const groove = lx < edge || ly < edge ? -grooveDepth : 0;
+  const lip = (lx >= edge && lx < edge + 2) || (ly >= edge && ly < edge + 2) ? 18 : 0;
+  const inset = lx > cell - 6 || ly > cell - 6 ? -12 : 0;
   return groove + lip + inset;
 }
 
@@ -197,7 +197,7 @@ function scratch(x, y, size, seed) {
 function metal(x, y, size, base, seed, opts = {}) {
   const cell = opts.cell ?? 128;
   const g = grain(x, y, size, seed, opts.grain ?? 18);
-  const panels = opts.panels === false ? 0 : panelShade(x, y, cell);
+  const panels = opts.panels === false ? 0 : panelShade(x, y, cell, opts.groove ?? 28);
   const rivets = opts.rivets === false ? 0 : rivet(x, y, cell, opts.rivetInset ?? 14);
   const sc = opts.scratches === false ? 0 : scratch(x, y, size, seed + 3);
   const along = opts.brush === "y" ? y : x;
@@ -215,9 +215,9 @@ function floorDiamond(x, y, size, base, seed) {
 
 function hazardStripes(x, y, size) {
   const on = chevron(x, y, 64);
-  const g = grain(x, y, size, 9, 10);
-  const yellow = [198 + g, 154 + g * 0.6, 36];
-  const black = [32 + g * 0.3, 30 + g * 0.3, 28];
+  const g = grain(x, y, size, 9, 4);
+  const yellow = [214 + g, 164 + g * 0.4, 28];
+  const black = [22 + g * 0.2, 20, 18];
   const c = on ? yellow : black;
   return [c[0], c[1], c[2], 255];
 }
@@ -258,7 +258,7 @@ function skull(x, y, size) {
   }
   const bone = head || jaw;
   const dark = eyeL || eyeR || nose || (jaw && !tooth && y > cy + size * 0.18);
-  const g = grain(x, y, size, 4, 8);
+  const g = grain(x, y, size, 4, 3);
   if (bone && !dark) return [214 + g, 196 + g * 0.7, 160, 255];
   return [28 + g * 0.4, 24, 26, 255];
 }
@@ -319,7 +319,7 @@ function rock(x, y, size) {
 function glass(x, y, size) {
   const streak = Math.sin((x / size) * Math.PI * 8) * 0.5 + 0.5;
   const n = fbm(x, y, size, 8, 3, 4);
-  const a = 70 + streak * 50 + n * 40;
+  const a = 120 + streak * 40 + n * 30;
   return [150 + streak * 40, 210, 220, a];
 }
 
@@ -338,10 +338,12 @@ function core(x, y, size) {
 
 function emissivePanel(x, y, size, color, seed) {
   const cell = 128;
-  const shade = panelShade(x, y, cell) * 0.35;
-  const g = grain(x, y, size, seed, 12);
-  const hot = diamondHeight(x, y, 64) * 40;
-  return [color[0] + shade + g + hot, color[1] + shade + g * 0.4 + hot * 0.3, color[2] + shade * 0.5 + hot * 0.1, 255];
+  const shade = panelShade(x, y, cell, 36) * 0.4;
+  const g = grain(x, y, size, seed, 6);
+  const lx = x % cell;
+  const ly = y % cell;
+  const core = lx > 16 && ly > 16 && lx < cell - 16 && ly < cell - 16 ? 46 : 0;
+  return [color[0] + shade + g + core, color[1] + shade * 0.35 + g * 0.3 + core * 0.25, color[2] + shade * 0.2 + core * 0.08, 255];
 }
 
 function beamTex(x, y, size) {
@@ -365,13 +367,14 @@ function vent(x, y, size) {
 }
 
 function jumppad(x, y, size) {
-  const cx = (x % 256) - 128;
-  const cy = (y % 256) - 128;
-  const d = Math.hypot(cx, cy);
-  const ring = Math.abs(d - 78) < 10 || Math.abs(d - 46) < 6;
-  const chev = d < 28;
-  const g = grain(x, y, size, 6, 8);
-  if (ring || chev) return [140, 255, 236, 255];
+  const cell = 128;
+  const lx = (x % cell) - cell / 2;
+  const ly = (y % cell) - cell / 2;
+  const d = Math.hypot(lx, ly);
+  const ring = Math.abs(d - 40) < 5 || Math.abs(d - 22) < 3.5;
+  const core = d < 8;
+  const g = grain(x, y, size, 6, 6);
+  if (ring || core) return [140, 255, 236, 255];
   return [16 + g, 36 + g, 38, 255];
 }
 
@@ -406,8 +409,8 @@ function ruinWall(x, y, size) {
 
 const ARENA = {
   floor: (x, y, s) => floorDiamond(x, y, s, [168, 172, 176], 1),
-  plate: (x, y, s) => metal(x, y, s, [104, 108, 114], 2, { cell: 128, grain: 7, scratches: false }),
-  wall: (x, y, s) => metal(x, y, s, [96, 100, 108], 3, { cell: 128, grain: 14 }),
+  plate: (x, y, s) => metal(x, y, s, [112, 116, 122], 2, { cell: 128, grain: 5, scratches: false, groove: 52 }),
+  wall: (x, y, s) => metal(x, y, s, [98, 102, 110], 3, { cell: 128, grain: 8, scratches: false, groove: 40 }),
   beam: (x, y, s) => metal(x, y, s, [108, 96, 84], 4, { cell: 256, brush: "y", rivetInset: 18 }),
   pipes: (x, y, s) => {
     const shade = pipeShade(x, y, 64, false);
